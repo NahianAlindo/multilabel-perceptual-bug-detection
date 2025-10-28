@@ -5,4 +5,4 @@
 This project is licensed under the **Non-Commercial Use License**.  
 You are free to use, modify, and distribute the software for non-commercial purposes.  
 Commercial use requires a separate license.  
-For commercial licensing inquiries, please contact [mailto:loutfouz.zaman1@ontariotechu.net].
+For commercial licensing inquiries, please contact loutfouz.zaman1@ontariotechu.net or nahian.rifaat@ontariotechu.net
