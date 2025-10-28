@@ -6,3 +6,5 @@ This project is licensed under the **Non-Commercial Use License**.
 You are free to use, modify, and distribute the software for non-commercial purposes.  
 Commercial use requires a separate license.  
 For commercial licensing inquiries, please contact loutfouz.zaman1@ontariotechu.net or loutfouz.zaman@ontariotechu.ca or nahian.rifaat@ontariotechu.net
+
+For access to dataset, please contact loutfouz.zaman1@ontariotechu.net for access to the dataset link: https://drive.google.com/file/d/1KBij5koAUHFwPHgaMceiOhPbPo1TDrEn/view?usp=drive_link
