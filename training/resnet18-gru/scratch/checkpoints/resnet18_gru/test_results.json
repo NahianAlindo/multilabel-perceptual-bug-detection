@@ -1,0 +1,200 @@
+{
+  "test_loss": 1.6031199400649112,
+  "test_f1_types": 0.1934298733210869,
+  "test_acc_count": 0.6554700854700855,
+  "per_class_metrics": {
+    "z-clipping": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "corrupted_texture": {
+      "precision": 0.12256410256410256,
+      "recall": 1.0,
+      "f1": 0.21836455002284147
+    },
+    "geometry_corruption": {
+      "precision": 0.11,
+      "recall": 1.0,
+      "f1": 0.19819819819819817
+    },
+    "z-fighting": {
+      "precision": 0.11393162393162393,
+      "recall": 1.0,
+      "f1": 0.2045576613212614
+    },
+    "boundary_hole": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    }
+  },
+  "per_count_metrics": {
+    "0_bugs": {
+      "precision": 0.6554700854700855,
+      "recall": 1.0,
+      "f1": 0.7918839382518457,
+      "support": 7669.0
+    },
+    "1_bugs": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 2103.0
+    },
+    "2_bugs": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 1070.0
+    },
+    "3_bugs": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 858.0
+    }
+  },
+  "combo_metrics": [
+    {
+      "combo": "corrupted_texture+geometry_corruption+z-fighting",
+      "precision": 0.006752136752136752,
+      "recall": 1.0,
+      "f1": 0.013413702351642753,
+      "count": 11700.0
+    },
+    {
+      "combo": "corrupted_texture",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 493.0
+    },
+    {
+      "combo": "z-clipping",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 466.0
+    },
+    {
+      "combo": "z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 417.0
+    },
+    {
+      "combo": "boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 388.0
+    },
+    {
+      "combo": "geometry_corruption",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 339.0
+    },
+    {
+      "combo": "z-fighting+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 140.0
+    },
+    {
+      "combo": "z-clipping+corrupted_texture",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 132.0
+    },
+    {
+      "combo": "corrupted_texture+geometry_corruption",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 122.0
+    },
+    {
+      "combo": "geometry_corruption+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 116.0
+    },
+    {
+      "combo": "z-clipping+z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 113.0
+    },
+    {
+      "combo": "z-clipping+geometry_corruption+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 106.0
+    },
+    {
+      "combo": "z-clipping+z-fighting+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 103.0
+    },
+    {
+      "combo": "corrupted_texture+geometry_corruption+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 103.0
+    },
+    {
+      "combo": "z-clipping+corrupted_texture+geometry_corruption",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 102.0
+    },
+    {
+      "combo": "z-clipping+corrupted_texture+z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 101.0
+    },
+    {
+      "combo": "corrupted_texture+z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 95.0
+    },
+    {
+      "combo": "z-clipping+geometry_corruption",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 90.0
+    },
+    {
+      "combo": "z-clipping+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 89.0
+    },
+    {
+      "combo": "geometry_corruption+z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 88.0
+    }
+  ]
+}

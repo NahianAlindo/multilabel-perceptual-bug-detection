@@ -2,10 +2,15 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+.claude/
 # C extensions
 *.so
-
+*.pt
+C:/Users/nahia/Desktop/storage/multilabel-perceptual-bug-detection/training/r3d18/scratch/checkpoints/r3d18_model/
+C:/Users/nahia/Desktop/storage/multilabel-perceptual-bug-detection/training/resnet18-gru/scratch/checkpoints/resnet18_gru/
+C:/Users/nahia/Desktop/storage/multilabel-perceptual-bug-detection/training/resnet18only/scratch/checkpoints/resnet18_only/
+C:/Users/nahia/Desktop/storage/multilabel-perceptual-bug-detection/training/i3d/i3d_model/
+C:/Users/nahia/Desktop/storage/multilabel-perceptual-bug-detection/training/anygate-results/checkpoint_epoch_060.pt
 # Distribution / packaging
 .Python
 build/

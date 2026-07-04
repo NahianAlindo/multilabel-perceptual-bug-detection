@@ -1,0 +1,575 @@
+{
+  "clip_level": {
+    "f1_types": 0.6102,
+    "f1_any": 0.7074,
+    "num_videos_evaluated": 57
+  },
+  "temporal_localization": {
+    "mAP_0.3": 0.1695,
+    "mAP_0.5": 0.0195,
+    "mAP_0.7": 0.0,
+    "mean_tIoU": 0.2653,
+    "per_class": {
+      "z_clipping": {
+        "AP_0.3": 0.1486,
+        "AP_0.5": 0.005,
+        "AP_0.7": 0.0
+      },
+      "corrupted_texture": {
+        "AP_0.3": 0.1823,
+        "AP_0.5": 0.0276,
+        "AP_0.7": 0.0
+      },
+      "geometry_corruption": {
+        "AP_0.3": 0.2205,
+        "AP_0.5": 0.031,
+        "AP_0.7": 0.0
+      },
+      "z_fighting": {
+        "AP_0.3": 0.1629,
+        "AP_0.5": 0.0279,
+        "AP_0.7": 0.0
+      },
+      "boundary_hole": {
+        "AP_0.3": 0.133,
+        "AP_0.5": 0.006,
+        "AP_0.7": 0.0
+      }
+    },
+    "segment_recall": {
+      "tIoU_0.3": 0.6275,
+      "tIoU_0.5": 0.2345,
+      "tIoU_0.7": 0.0
+    }
+  },
+  "per_video": [
+    {
+      "video_id": "fnafautobug2_fnaf_003",
+      "duration": 494.067,
+      "num_windows": 493,
+      "num_pred_segments": 126,
+      "num_gt_annotations": 67,
+      "clip_f1_types": 0.5438,
+      "clip_f1_any": 0.7229
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_005",
+      "duration": 477.467,
+      "num_windows": 476,
+      "num_pred_segments": 106,
+      "num_gt_annotations": 36,
+      "clip_f1_types": 0.5581,
+      "clip_f1_any": 0.6579
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_010",
+      "duration": 479.833,
+      "num_windows": 478,
+      "num_pred_segments": 129,
+      "num_gt_annotations": 47,
+      "clip_f1_types": 0.558,
+      "clip_f1_any": 0.6893
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_019",
+      "duration": 451.867,
+      "num_windows": 450,
+      "num_pred_segments": 123,
+      "num_gt_annotations": 74,
+      "clip_f1_types": 0.6498,
+      "clip_f1_any": 0.8018
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_022",
+      "duration": 49.533,
+      "num_windows": 48,
+      "num_pred_segments": 14,
+      "num_gt_annotations": 6,
+      "clip_f1_types": 0.2034,
+      "clip_f1_any": 0.4889
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_023",
+      "duration": 230.1,
+      "num_windows": 229,
+      "num_pred_segments": 72,
+      "num_gt_annotations": 34,
+      "clip_f1_types": 0.5,
+      "clip_f1_any": 0.6807
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_026",
+      "duration": 471.467,
+      "num_windows": 470,
+      "num_pred_segments": 98,
+      "num_gt_annotations": 51,
+      "clip_f1_types": 0.6089,
+      "clip_f1_any": 0.7076
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_030",
+      "duration": 169.6,
+      "num_windows": 168,
+      "num_pred_segments": 47,
+      "num_gt_annotations": 15,
+      "clip_f1_types": 0.4242,
+      "clip_f1_any": 0.5938
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_032",
+      "duration": 468.267,
+      "num_windows": 467,
+      "num_pred_segments": 106,
+      "num_gt_annotations": 101,
+      "clip_f1_types": 0.6467,
+      "clip_f1_any": 0.6946
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_033",
+      "duration": 443.133,
+      "num_windows": 442,
+      "num_pred_segments": 122,
+      "num_gt_annotations": 95,
+      "clip_f1_types": 0.6599,
+      "clip_f1_any": 0.7212
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_042",
+      "duration": 113.233,
+      "num_windows": 112,
+      "num_pred_segments": 31,
+      "num_gt_annotations": 21,
+      "clip_f1_types": 0.7143,
+      "clip_f1_any": 0.7901
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_046",
+      "duration": 388.033,
+      "num_windows": 387,
+      "num_pred_segments": 143,
+      "num_gt_annotations": 123,
+      "clip_f1_types": 0.77,
+      "clip_f1_any": 0.753
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_049",
+      "duration": 469.333,
+      "num_windows": 468,
+      "num_pred_segments": 190,
+      "num_gt_annotations": 146,
+      "clip_f1_types": 0.7471,
+      "clip_f1_any": 0.7229
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_050",
+      "duration": 367.967,
+      "num_windows": 367,
+      "num_pred_segments": 154,
+      "num_gt_annotations": 61,
+      "clip_f1_types": 0.4937,
+      "clip_f1_any": 0.4747
+    },
+    {
+      "video_id": "fnafautobug2_fnaf_055",
+      "duration": 119.3,
+      "num_windows": 118,
+      "num_pred_segments": 36,
+      "num_gt_annotations": 39,
+      "clip_f1_types": 0.5917,
+      "clip_f1_any": 0.7216
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_005",
+      "duration": 308.067,
+      "num_windows": 307,
+      "num_pred_segments": 76,
+      "num_gt_annotations": 26,
+      "clip_f1_types": 0.4522,
+      "clip_f1_any": 0.6073
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_002",
+      "duration": 880.067,
+      "num_windows": 879,
+      "num_pred_segments": 229,
+      "num_gt_annotations": 164,
+      "clip_f1_types": 0.6796,
+      "clip_f1_any": 0.8049
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_011",
+      "duration": 557.6,
+      "num_windows": 556,
+      "num_pred_segments": 122,
+      "num_gt_annotations": 65,
+      "clip_f1_types": 0.6941,
+      "clip_f1_any": 0.7778
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_012",
+      "duration": 590.4,
+      "num_windows": 589,
+      "num_pred_segments": 85,
+      "num_gt_annotations": 73,
+      "clip_f1_types": 0.5865,
+      "clip_f1_any": 0.6485
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_015",
+      "duration": 379.4,
+      "num_windows": 378,
+      "num_pred_segments": 71,
+      "num_gt_annotations": 46,
+      "clip_f1_types": 0.5756,
+      "clip_f1_any": 0.6727
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_019",
+      "duration": 239.9,
+      "num_windows": 239,
+      "num_pred_segments": 66,
+      "num_gt_annotations": 46,
+      "clip_f1_types": 0.658,
+      "clip_f1_any": 0.7024
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_040",
+      "duration": 171.8,
+      "num_windows": 170,
+      "num_pred_segments": 48,
+      "num_gt_annotations": 34,
+      "clip_f1_types": 0.8,
+      "clip_f1_any": 0.7642
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_054",
+      "duration": 293.933,
+      "num_windows": 293,
+      "num_pred_segments": 100,
+      "num_gt_annotations": 89,
+      "clip_f1_types": 0.8431,
+      "clip_f1_any": 0.7905
+    },
+    {
+      "video_id": "fpsmicroautobug2_fpsmicro_059",
+      "duration": 251.967,
+      "num_windows": 251,
+      "num_pred_segments": 98,
+      "num_gt_annotations": 82,
+      "clip_f1_types": 0.8436,
+      "clip_f1_any": 0.8409
+    },
+    {
+      "video_id": "mkartautobug2_mkart_011",
+      "duration": 78.4,
+      "num_windows": 77,
+      "num_pred_segments": 22,
+      "num_gt_annotations": 15,
+      "clip_f1_types": 0.6239,
+      "clip_f1_any": 0.7826
+    },
+    {
+      "video_id": "mkartautobug2_mkart_012",
+      "duration": 209.2,
+      "num_windows": 208,
+      "num_pred_segments": 77,
+      "num_gt_annotations": 33,
+      "clip_f1_types": 0.6008,
+      "clip_f1_any": 0.7589
+    },
+    {
+      "video_id": "mkartautobug2_mkart_019",
+      "duration": 116.833,
+      "num_windows": 115,
+      "num_pred_segments": 30,
+      "num_gt_annotations": 11,
+      "clip_f1_types": 0.4889,
+      "clip_f1_any": 0.675
+    },
+    {
+      "video_id": "mkartautobug2_mkart_021",
+      "duration": 82.233,
+      "num_windows": 81,
+      "num_pred_segments": 20,
+      "num_gt_annotations": 11,
+      "clip_f1_types": 0.675,
+      "clip_f1_any": 0.8
+    },
+    {
+      "video_id": "mkartautobug2_mkart_022",
+      "duration": 88.867,
+      "num_windows": 87,
+      "num_pred_segments": 26,
+      "num_gt_annotations": 13,
+      "clip_f1_types": 0.3667,
+      "clip_f1_any": 0.6337
+    },
+    {
+      "video_id": "mkartautobug2_mkart_026",
+      "duration": 174.167,
+      "num_windows": 173,
+      "num_pred_segments": 56,
+      "num_gt_annotations": 27,
+      "clip_f1_types": 0.6604,
+      "clip_f1_any": 0.7742
+    },
+    {
+      "video_id": "mkartautobug2_mkart_029",
+      "duration": 147.433,
+      "num_windows": 146,
+      "num_pred_segments": 44,
+      "num_gt_annotations": 26,
+      "clip_f1_types": 0.4868,
+      "clip_f1_any": 0.7232
+    },
+    {
+      "video_id": "mkartautobug2_mkart_036",
+      "duration": 130.833,
+      "num_windows": 129,
+      "num_pred_segments": 32,
+      "num_gt_annotations": 22,
+      "clip_f1_types": 0.5843,
+      "clip_f1_any": 0.7051
+    },
+    {
+      "video_id": "mkartautobug2_mkart_038",
+      "duration": 211.033,
+      "num_windows": 210,
+      "num_pred_segments": 56,
+      "num_gt_annotations": 40,
+      "clip_f1_types": 0.5217,
+      "clip_f1_any": 0.6963
+    },
+    {
+      "video_id": "mkartautobug2_mkart_052",
+      "duration": 88.1,
+      "num_windows": 87,
+      "num_pred_segments": 21,
+      "num_gt_annotations": 9,
+      "clip_f1_types": 0.4565,
+      "clip_f1_any": 0.6154
+    },
+    {
+      "video_id": "mkartautobug2_mkart_054",
+      "duration": 144.667,
+      "num_windows": 143,
+      "num_pred_segments": 44,
+      "num_gt_annotations": 14,
+      "clip_f1_types": 0.4706,
+      "clip_f1_any": 0.6903
+    },
+    {
+      "video_id": "mkartautobug2_mkart_057",
+      "duration": 71.133,
+      "num_windows": 70,
+      "num_pred_segments": 18,
+      "num_gt_annotations": 9,
+      "clip_f1_types": 0.4789,
+      "clip_f1_any": 0.7188
+    },
+    {
+      "video_id": "mkartautobug2_mkart_059",
+      "duration": 180.1,
+      "num_windows": 179,
+      "num_pred_segments": 40,
+      "num_gt_annotations": 23,
+      "clip_f1_types": 0.555,
+      "clip_f1_any": 0.6554
+    },
+    {
+      "video_id": "mkartautobug2_mkart_075",
+      "duration": 211.167,
+      "num_windows": 210,
+      "num_pred_segments": 92,
+      "num_gt_annotations": 55,
+      "clip_f1_types": 0.6987,
+      "clip_f1_any": 0.7379
+    },
+    {
+      "video_id": "mkartautobug2_mkart_085",
+      "duration": 74.5,
+      "num_windows": 73,
+      "num_pred_segments": 28,
+      "num_gt_annotations": 17,
+      "clip_f1_types": 0.6372,
+      "clip_f1_any": 0.6765
+    },
+    {
+      "video_id": "mkartautobug2_mkart_088",
+      "duration": 193.733,
+      "num_windows": 192,
+      "num_pred_segments": 56,
+      "num_gt_annotations": 51,
+      "clip_f1_types": 0.6414,
+      "clip_f1_any": 0.7831
+    },
+    {
+      "video_id": "mkartautobug2_mkart_093",
+      "duration": 112.833,
+      "num_windows": 111,
+      "num_pred_segments": 35,
+      "num_gt_annotations": 31,
+      "clip_f1_types": 0.6494,
+      "clip_f1_any": 0.6923
+    },
+    {
+      "video_id": "mkartautobug2_mkart_099",
+      "duration": 183.067,
+      "num_windows": 182,
+      "num_pred_segments": 66,
+      "num_gt_annotations": 47,
+      "clip_f1_types": 0.6596,
+      "clip_f1_any": 0.7485
+    },
+    {
+      "video_id": "mkartautobug2_mkart_111",
+      "duration": 204.833,
+      "num_windows": 203,
+      "num_pred_segments": 78,
+      "num_gt_annotations": 55,
+      "clip_f1_types": 0.6878,
+      "clip_f1_any": 0.69
+    },
+    {
+      "video_id": "mkartautobug2_mkart_112",
+      "duration": 188.433,
+      "num_windows": 187,
+      "num_pred_segments": 64,
+      "num_gt_annotations": 49,
+      "clip_f1_types": 0.7566,
+      "clip_f1_any": 0.8025
+    },
+    {
+      "video_id": "mkartautobug2_mkart_116",
+      "duration": 192.8,
+      "num_windows": 191,
+      "num_pred_segments": 66,
+      "num_gt_annotations": 47,
+      "clip_f1_types": 0.5951,
+      "clip_f1_any": 0.6736
+    },
+    {
+      "video_id": "mkartautobug2_mkart_121",
+      "duration": 115.033,
+      "num_windows": 114,
+      "num_pred_segments": 28,
+      "num_gt_annotations": 18,
+      "clip_f1_types": 0.322,
+      "clip_f1_any": 0.5849
+    },
+    {
+      "video_id": "mkartautobug2_mkart_125",
+      "duration": 149.033,
+      "num_windows": 148,
+      "num_pred_segments": 29,
+      "num_gt_annotations": 25,
+      "clip_f1_types": 0.6359,
+      "clip_f1_any": 0.7
+    },
+    {
+      "video_id": "mkartautobug2_mkart_134",
+      "duration": 213.633,
+      "num_windows": 212,
+      "num_pred_segments": 74,
+      "num_gt_annotations": 55,
+      "clip_f1_types": 0.7458,
+      "clip_f1_any": 0.7739
+    },
+    {
+      "video_id": "mkartautobug2_mkart_136",
+      "duration": 150.667,
+      "num_windows": 149,
+      "num_pred_segments": 48,
+      "num_gt_annotations": 19,
+      "clip_f1_types": 0.3007,
+      "clip_f1_any": 0.6471
+    },
+    {
+      "video_id": "mkartautobug2_mkart_146",
+      "duration": 58.7,
+      "num_windows": 57,
+      "num_pred_segments": 26,
+      "num_gt_annotations": 15,
+      "clip_f1_types": 0.6087,
+      "clip_f1_any": 0.6667
+    },
+    {
+      "video_id": "mkartautobug2_mkart_152",
+      "duration": 31.733,
+      "num_windows": 30,
+      "num_pred_segments": 12,
+      "num_gt_annotations": 5,
+      "clip_f1_types": 0.5581,
+      "clip_f1_any": 0.5926
+    },
+    {
+      "video_id": "mkartautobug2_mkart_154",
+      "duration": 32.333,
+      "num_windows": 31,
+      "num_pred_segments": 13,
+      "num_gt_annotations": 9,
+      "clip_f1_types": 0.678,
+      "clip_f1_any": 0.7222
+    },
+    {
+      "video_id": "mkartautobug2_mkart_155",
+      "duration": 121.433,
+      "num_windows": 120,
+      "num_pred_segments": 51,
+      "num_gt_annotations": 53,
+      "clip_f1_types": 0.8061,
+      "clip_f1_any": 0.7969
+    },
+    {
+      "video_id": "mkartautobug2_mkart_156",
+      "duration": 209.3,
+      "num_windows": 208,
+      "num_pred_segments": 83,
+      "num_gt_annotations": 80,
+      "clip_f1_types": 0.75,
+      "clip_f1_any": 0.6783
+    },
+    {
+      "video_id": "mkartautobug2_mkart_158",
+      "duration": 167.4,
+      "num_windows": 166,
+      "num_pred_segments": 71,
+      "num_gt_annotations": 62,
+      "clip_f1_types": 0.7949,
+      "clip_f1_any": 0.7329
+    },
+    {
+      "video_id": "mkartautobug2_mkart_168",
+      "duration": 205.467,
+      "num_windows": 204,
+      "num_pred_segments": 85,
+      "num_gt_annotations": 80,
+      "clip_f1_types": 0.7565,
+      "clip_f1_any": 0.7914
+    },
+    {
+      "video_id": "mkartautobug2_mkart_176",
+      "duration": 192.733,
+      "num_windows": 191,
+      "num_pred_segments": 100,
+      "num_gt_annotations": 77,
+      "clip_f1_types": 0.7288,
+      "clip_f1_any": 0.7708
+    }
+  ],
+  "config": {
+    "checkpoint": "/home/nahian26/scratch/checkpoints/anygate_wgatedreg/checkpoint_epoch_060.pt",
+    "window_sec": 2.0,
+    "stride_sec": 1.0,
+    "fps": 8.0,
+    "img_size": 224,
+    "thr_any": 0.5,
+    "thr_map": {
+      "z-clipping": 0.5,
+      "corrupted_texture": 0.5,
+      "geometry_corruption": 0.5,
+      "z-fighting": 0.5,
+      "boundary_hole": 0.5
+    }
+  }
+}

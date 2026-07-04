@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bug Detection</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Custom scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+
+    /* Timeline track */
+    #timeline-track { position: relative; height: 48px; }
+
+    /* Playhead */
+    #playhead {
+      position: absolute;
+      top: 0; bottom: 0;
+      width: 2px;
+      background: white;
+      pointer-events: none;
+      z-index: 10;
+      transition: left 0.1s linear;
+    }
+
+    /* Bug marker pill */
+    .bug-marker {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      height: 20px;
+      min-width: 4px;
+      border-radius: 3px;
+      cursor: pointer;
+      opacity: 0.85;
+      transition: opacity 0.15s, transform 0.15s;
+      z-index: 5;
+    }
+    .bug-marker:hover { opacity: 1; transform: translateY(-50%) scaleY(1.3); }
+    .bug-marker.selected { opacity: 1; outline: 2px solid white; }
+
+    /* Tooltip */
+    #tooltip {
+      position: fixed;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: #e2e8f0;
+      pointer-events: none;
+      z-index: 1000;
+      white-space: nowrap;
+      display: none;
+    }
+
+    /* Drop zone hover */
+    #drop-zone.drag-over {
+      border-color: #6366f1;
+      background-color: rgba(99, 102, 241, 0.08);
+    }
+
+    /* Spinner */
+    .spinner {
+      border: 3px solid #334155;
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      width: 40px; height: 40px;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Progress bar shimmer */
+    @keyframes shimmer {
+      0% { background-position: -200% center; }
+      100% { background-position: 200% center; }
+    }
+    #progress-bar-fill {
+      background: linear-gradient(90deg, #6366f1 0%, #818cf8 50%, #6366f1 100%);
+      background-size: 200% auto;
+      animation: shimmer 1.5s linear infinite;
+      transition: width 0.4s ease;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased">
+
+<div id="tooltip"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- SETTINGS MODAL (ngrok URL) -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="settings-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+  <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-base font-semibold text-white">Inference Server Settings</h2>
+      <button id="settings-close" class="text-slate-500 hover:text-slate-300 text-xl leading-none">✕</button>
+    </div>
+
+    <p class="text-sm text-slate-400 mb-4">
+      By default the UI talks to a local backend (<code class="text-slate-300">localhost:8000</code>).
+      To use a Kaggle kernel instead, start <code class="text-slate-300">kaggle_inference_server.py</code>
+      and paste the ngrok URL below.
+    </p>
+
+    <label for="ngrok-input" class="block text-xs text-slate-400 mb-1 font-medium">Kaggle ngrok URL</label>
+    <input
+      id="ngrok-input"
+      type="url"
+      placeholder="https://xxxx.ngrok-free.app"
+      class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+    />
+    <p class="text-xs text-slate-500 mt-1">Leave blank to use local backend.</p>
+
+    <div id="settings-status" class="hidden mt-3 text-xs rounded-lg px-3 py-2"></div>
+
+    <div class="flex gap-3 mt-5 justify-end">
+      <button id="settings-test"
+        class="px-4 py-2 text-sm bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors">
+        Test connection
+      </button>
+      <button id="settings-save"
+        class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-colors">
+        Save
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- UPLOAD PAGE -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="page-upload" class="min-h-screen flex flex-col items-center justify-center px-4">
+  <div class="mb-8 text-center relative">
+    <h1 class="text-3xl font-bold tracking-tight text-white">
+      Perceptual Bug Detector
+    </h1>
+    <p class="mt-2 text-slate-400 text-sm">
+      Upload a gameplay video (up to 20 minutes) to detect and localize visual bugs.
+    </p>
+    <!-- Settings gear (top-right of heading block) -->
+    <button
+      id="open-settings-btn"
+      title="Inference server settings"
+      class="absolute top-0 right-0 text-slate-500 hover:text-slate-300 transition-colors p-1"
+      aria-label="Open inference server settings"
+    >
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+          d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+    </button>
+    <!-- Indicator dot when using Kaggle -->
+    <span id="kaggle-indicator" class="hidden absolute top-0 right-0 mt-0.5 mr-0.5 w-2 h-2 bg-green-400 rounded-full"></span>
+  </div>
+
+  <div
+    id="drop-zone"
+    class="w-full max-w-xl border-2 border-dashed border-slate-600 rounded-2xl p-12 flex flex-col items-center gap-4 cursor-pointer hover:border-indigo-500 transition-colors"
+  >
+    <!-- Icon -->
+    <svg class="w-12 h-12 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+    </svg>
+    <div class="text-center">
+      <p class="text-slate-300 font-medium">Drop your video here</p>
+      <p class="text-slate-500 text-sm mt-1">or click to browse</p>
+    </div>
+    <input id="file-input" type="file" accept="video/*" class="hidden" />
+    <button
+      id="browse-btn"
+      class="mt-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
+    >
+      Choose File
+    </button>
+  </div>
+
+  <div id="file-info" class="mt-4 text-sm text-slate-400 hidden"></div>
+  <div id="upload-error" class="mt-3 text-sm text-red-400 hidden"></div>
+
+  <button
+    id="upload-btn"
+    class="mt-6 px-8 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors hidden"
+  >
+    Analyze Video
+  </button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- PROCESSING PAGE -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="page-processing" class="hidden min-h-screen flex flex-col items-center justify-center px-4">
+  <div class="spinner mb-8"></div>
+  <h2 class="text-xl font-semibold text-white mb-2">Analyzing Video…</h2>
+  <p id="processing-msg" class="text-slate-400 text-sm mb-6">Starting up…</p>
+
+  <div class="w-full max-w-sm bg-slate-800 rounded-full h-3 overflow-hidden">
+    <div id="progress-bar-fill" class="h-full rounded-full" style="width: 0%"></div>
+  </div>
+  <p id="progress-pct" class="mt-2 text-slate-500 text-xs">0%</p>
+  <p id="inference-mode-label" class="mt-4 text-slate-600 text-xs"></p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<!-- RESULTS PAGE -->
+<!-- ═══════════════════════════════════════════════════════════════ -->
+<div id="page-results" class="hidden flex flex-col h-screen overflow-hidden">
+
+  <!-- Top bar -->
+  <header class="flex items-center justify-between px-5 py-3 bg-slate-900 border-b border-slate-800 shrink-0">
+    <h1 class="text-base font-semibold text-white tracking-tight">Perceptual Bug Detector</h1>
+    <button
+      id="new-upload-btn"
+      class="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
+    >
+      ← New Upload
+    </button>
+  </header>
+
+  <!-- Video player -->
+  <div class="bg-black shrink-0 flex justify-center" style="max-height: 45vh;">
+    <video
+      id="video-player"
+      class="h-full w-auto max-w-full outline-none"
+      controls
+      preload="metadata"
+    ></video>
+  </div>
+
+  <!-- Timeline -->
+  <div class="bg-slate-900 border-t border-slate-800 px-4 py-3 shrink-0">
+    <div class="flex items-center gap-2 mb-1">
+      <span class="text-xs text-slate-500 font-mono w-12 text-right" id="tl-current">0:00</span>
+      <div
+        id="timeline-track"
+        class="flex-1 bg-slate-800 rounded cursor-pointer select-none"
+      >
+        <div id="playhead"></div>
+        <!-- markers injected here -->
+      </div>
+      <span class="text-xs text-slate-500 font-mono w-12" id="tl-duration">0:00</span>
+    </div>
+    <div class="flex gap-3 mt-2 flex-wrap" id="legend"></div>
+  </div>
+
+  <!-- Bottom panel: bug list + detail -->
+  <div class="flex flex-1 min-h-0 border-t border-slate-800">
+
+    <!-- Bug list -->
+    <div class="w-56 shrink-0 border-r border-slate-800 flex flex-col bg-slate-900">
+      <div class="px-3 py-2 border-b border-slate-800">
+        <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Detections</p>
+        <p id="detection-count" class="text-xs text-slate-500 mt-0.5"></p>
+      </div>
+      <ul id="bug-list" class="flex-1 overflow-y-auto text-sm"></ul>
+    </div>
+
+    <!-- Detail panel -->
+    <div class="flex-1 overflow-y-auto bg-slate-950 px-5 py-4">
+      <div id="detail-empty" class="h-full flex items-center justify-center text-slate-600 text-sm">
+        Select a detection to see details
+      </div>
+      <div id="detail-card" class="hidden">
+        <p class="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-3">Bug Segment</p>
+        <div class="flex items-baseline gap-3 mb-4">
+          <span id="detail-time" class="text-lg font-mono font-semibold text-white"></span>
+          <span id="detail-duration" class="text-xs text-slate-500"></span>
+        </div>
+        <p class="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-2">Labels</p>
+        <div id="detail-labels" class="flex flex-wrap gap-2"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────────────
+// Config
+// ─────────────────────────────────────────────────────────────────
+const LOCAL_API    = 'http://localhost:8000';
+const MAX_DURATION = 20 * 60;
+const POLL_INTERVAL = 3000;
+
+function getAPI()          { return localStorage.getItem('kaggle_ngrok_url') || LOCAL_API; }
+function isKaggleMode()    { return !!localStorage.getItem('kaggle_ngrok_url'); }
+function apiUrl(path)      { return `${getAPI()}${path}`; }
+
+const BUG_COLORS = {
+  z_clipping:          { bg: 'bg-red-500',    border: 'border-red-400',    text: 'text-red-100',    hex: '#ef4444' },
+  corrupted_texture:   { bg: 'bg-amber-500',  border: 'border-amber-400',  text: 'text-amber-100',  hex: '#f59e0b' },
+  geometry_corruption: { bg: 'bg-orange-500', border: 'border-orange-400', text: 'text-orange-100', hex: '#f97316' },
+  z_fighting:          { bg: 'bg-purple-500', border: 'border-purple-400', text: 'text-purple-100', hex: '#a855f7' },
+  boundary_hole:       { bg: 'bg-blue-500',   border: 'border-blue-400',   text: 'text-blue-100',   hex: '#3b82f6' },
+};
+const DEFAULT_COLOR = { bg: 'bg-slate-500', border: 'border-slate-400', text: 'text-slate-100', hex: '#64748b' };
+
+// ─────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────
+let state = {
+  jobId: null,
+  pollTimer: null,
+  annotations: [],       // flat list from API
+  segments: [],          // grouped by (start, end) for display
+  selectedSegIdx: null,
+  videoDuration: 0,
+};
+
+// ─────────────────────────────────────────────────────────────────
+// Page switching
+// ─────────────────────────────────────────────────────────────────
+function showPage(name) {
+  ['upload', 'processing', 'results'].forEach(p => {
+    document.getElementById(`page-${p}`).classList.toggle('hidden', p !== name);
+    document.getElementById(`page-${p}`).classList.toggle('flex', p === name);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Utility
+// ─────────────────────────────────────────────────────────────────
+function fmtTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function colorFor(bugType) {
+  return BUG_COLORS[bugType] ?? DEFAULT_COLOR;
+}
+
+function bugLabel(bugType) {
+  return bugType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Upload page
+// ─────────────────────────────────────────────────────────────────
+const dropZone   = document.getElementById('drop-zone');
+const fileInput  = document.getElementById('file-input');
+const browseBtn  = document.getElementById('browse-btn');
+const fileInfo   = document.getElementById('file-info');
+const uploadErr  = document.getElementById('upload-error');
+const uploadBtn  = document.getElementById('upload-btn');
+
+let selectedFile = null;
+
+browseBtn.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('click', e => { if (e.target === dropZone) fileInput.click(); });
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) handleFileSelected(f);
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) handleFileSelected(fileInput.files[0]);
+});
+
+function handleFileSelected(file) {
+  uploadErr.classList.add('hidden');
+  if (!file.type.startsWith('video/')) {
+    showUploadError('Please select a video file.');
+    return;
+  }
+
+  selectedFile = file;
+  fileInfo.textContent = `${file.name}  (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
+  fileInfo.classList.remove('hidden');
+
+  // Check duration via a temporary <video> element
+  const tmpVideo = document.createElement('video');
+  tmpVideo.preload = 'metadata';
+  tmpVideo.onloadedmetadata = () => {
+    URL.revokeObjectURL(tmpVideo.src);
+    if (tmpVideo.duration > MAX_DURATION) {
+      showUploadError(`Video is ${fmtTime(tmpVideo.duration)} — maximum allowed is 20:00.`);
+      uploadBtn.classList.add('hidden');
+      selectedFile = null;
+    } else {
+      uploadBtn.classList.remove('hidden');
+    }
+  };
+  tmpVideo.src = URL.createObjectURL(file);
+}
+
+function showUploadError(msg) {
+  uploadErr.textContent = msg;
+  uploadErr.classList.remove('hidden');
+}
+
+uploadBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+  uploadBtn.disabled = true;
+  uploadBtn.textContent = 'Uploading…';
+
+  const form = new FormData();
+  form.append('file', selectedFile);
+
+  try {
+    const res = await fetch(apiUrl('/api/upload'), { method: 'POST', body: form });
+    if (!res.ok) throw new Error(await res.text());
+    const { job_id } = await res.json();
+    state.jobId = job_id;
+    showPage('processing');
+    startPolling();
+  } catch (err) {
+    showUploadError(`Upload failed: ${err.message}`);
+    uploadBtn.disabled = false;
+    uploadBtn.textContent = 'Analyze Video';
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Processing page
+// ─────────────────────────────────────────────────────────────────
+function startPolling() {
+  updateInferenceModeLabel();
+  state.pollTimer = setInterval(pollStatus, POLL_INTERVAL);
+  pollStatus();
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch(apiUrl(`/api/status/${state.jobId}`));
+    const data = await res.json();
+
+    document.getElementById('processing-msg').textContent = data.message || '';
+    const pct = data.progress ?? 0;
+    document.getElementById('progress-bar-fill').style.width = `${pct}%`;
+    document.getElementById('progress-pct').textContent = `${pct}%`;
+
+    if (data.status === 'done') {
+      clearInterval(state.pollTimer);
+      loadResults();
+    } else if (data.status === 'error') {
+      clearInterval(state.pollTimer);
+      showPage('upload');
+      showUploadError(`Inference error: ${data.message}`);
+    }
+  } catch (err) {
+    // network hiccup – keep polling
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Results
+// ─────────────────────────────────────────────────────────────────
+async function loadResults() {
+  const res = await fetch(apiUrl(`/api/results/${state.jobId}`));
+  const data = await res.json();
+
+  state.annotations = data.annotations || [];
+
+  // Group annotations that share the same start/end into one "segment"
+  const map = new Map();
+  for (const ann of state.annotations) {
+    const key = `${ann.start}_${ann.end}`;
+    if (!map.has(key)) map.set(key, { start: ann.start, end: ann.end, duration: ann.duration, bug_types: [] });
+    map.get(key).bug_types.push(ann.bug_type);
+  }
+  state.segments = Array.from(map.values()).sort((a, b) => a.start - b.start);
+
+  // Set video source
+  const video = document.getElementById('video-player');
+  video.src = apiUrl(`/api/video/${state.jobId}`);
+
+  showPage('results');
+  video.addEventListener('loadedmetadata', () => {
+    state.videoDuration = video.duration;
+    document.getElementById('tl-duration').textContent = fmtTime(video.duration);
+    buildTimeline();
+    buildBugList();
+    buildLegend();
+  }, { once: true });
+
+  video.addEventListener('timeupdate', onTimeUpdate);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Timeline
+// ─────────────────────────────────────────────────────────────────
+function buildTimeline() {
+  const track = document.getElementById('timeline-track');
+  // Remove old markers (keep playhead)
+  track.querySelectorAll('.bug-marker').forEach(el => el.remove());
+
+  const dur = state.videoDuration;
+
+  // Stack markers per bug_type within each segment
+  state.segments.forEach((seg, idx) => {
+    const numTypes = seg.bug_types.length;
+    seg.bug_types.forEach((bt, btIdx) => {
+      const c = colorFor(bt);
+      const marker = document.createElement('div');
+      marker.className = `bug-marker`;
+      marker.style.left = `${(seg.start / dur) * 100}%`;
+      marker.style.width = `max(4px, ${((seg.end - seg.start) / dur) * 100}%)`;
+      marker.style.backgroundColor = c.hex;
+      // Stack vertically if multi-label
+      if (numTypes > 1) {
+        const sliceH = 20 / numTypes;
+        marker.style.height = `${sliceH}px`;
+        marker.style.top = `${50 - 10 + btIdx * sliceH}%`;
+        marker.style.transform = 'none';
+      }
+      marker.dataset.segIdx = idx;
+      marker.addEventListener('click', () => selectSegment(idx));
+      marker.addEventListener('mouseenter', e => showTooltip(e, seg));
+      marker.addEventListener('mouseleave', hideTooltip);
+      track.appendChild(marker);
+    });
+  });
+
+  // Click on track background → seek
+  track.addEventListener('click', e => {
+    if (e.target === track || e.target.id === 'playhead') {
+      const rect = track.getBoundingClientRect();
+      const ratio = (e.clientX - rect.left) / rect.width;
+      const video = document.getElementById('video-player');
+      video.currentTime = ratio * state.videoDuration;
+    }
+  });
+}
+
+function onTimeUpdate() {
+  const video = document.getElementById('video-player');
+  const ratio = video.currentTime / state.videoDuration;
+  document.getElementById('playhead').style.left = `${ratio * 100}%`;
+  document.getElementById('tl-current').textContent = fmtTime(video.currentTime);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Tooltip
+// ─────────────────────────────────────────────────────────────────
+const tooltip = document.getElementById('tooltip');
+
+function showTooltip(e, seg) {
+  tooltip.innerHTML = `
+    <span style="color:#94a3b8">${fmtTime(seg.start)} – ${fmtTime(seg.end)}</span><br>
+    ${seg.bug_types.map(bt => `<span style="color:${colorFor(bt).hex}">${bugLabel(bt)}</span>`).join('<br>')}
+  `;
+  tooltip.style.display = 'block';
+  positionTooltip(e);
+}
+
+function positionTooltip(e) {
+  tooltip.style.left = `${e.clientX + 12}px`;
+  tooltip.style.top  = `${e.clientY - 10}px`;
+}
+
+function hideTooltip() { tooltip.style.display = 'none'; }
+
+document.addEventListener('mousemove', e => {
+  if (tooltip.style.display !== 'none') positionTooltip(e);
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Bug list
+// ─────────────────────────────────────────────────────────────────
+function buildBugList() {
+  const ul = document.getElementById('bug-list');
+  ul.innerHTML = '';
+  document.getElementById('detection-count').textContent =
+    `${state.segments.length} segment${state.segments.length !== 1 ? 's' : ''}`;
+
+  state.segments.forEach((seg, idx) => {
+    const li = document.createElement('li');
+    li.dataset.segIdx = idx;
+    li.className = 'px-3 py-2.5 cursor-pointer hover:bg-slate-800 border-b border-slate-800/60 transition-colors';
+    // Primary color = first bug type
+    const c = colorFor(seg.bug_types[0]);
+    li.innerHTML = `
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full shrink-0" style="background:${c.hex}"></span>
+        <span class="font-mono text-xs text-slate-300">${fmtTime(seg.start)}</span>
+      </div>
+      <div class="ml-4 mt-0.5 flex flex-wrap gap-1">
+        ${seg.bug_types.map(bt => `<span class="text-[10px] px-1.5 py-0.5 rounded" style="background:${colorFor(bt).hex}22;color:${colorFor(bt).hex}">${bugLabel(bt)}</span>`).join('')}
+      </div>
+    `;
+    li.addEventListener('click', () => selectSegment(idx));
+    ul.appendChild(li);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Legend
+// ─────────────────────────────────────────────────────────────────
+function buildLegend() {
+  const presentTypes = [...new Set(state.annotations.map(a => a.bug_type))];
+  const legend = document.getElementById('legend');
+  legend.innerHTML = '';
+  presentTypes.forEach(bt => {
+    const c = colorFor(bt);
+    const span = document.createElement('span');
+    span.className = 'flex items-center gap-1.5 text-xs text-slate-400';
+    span.innerHTML = `<span class="w-2.5 h-2.5 rounded-sm inline-block" style="background:${c.hex}"></span>${bugLabel(bt)}`;
+    legend.appendChild(span);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Segment selection
+// ─────────────────────────────────────────────────────────────────
+function selectSegment(idx) {
+  state.selectedSegIdx = idx;
+  const seg = state.segments[idx];
+  const video = document.getElementById('video-player');
+  video.currentTime = seg.start;
+
+  // Highlight markers
+  document.querySelectorAll('.bug-marker').forEach(m => {
+    m.classList.toggle('selected', parseInt(m.dataset.segIdx) === idx);
+  });
+
+  // Highlight list item
+  document.querySelectorAll('#bug-list li').forEach(li => {
+    const isSelected = parseInt(li.dataset.segIdx) === idx;
+    li.classList.toggle('bg-slate-800', isSelected);
+    li.classList.toggle('border-l-2', isSelected);
+    if (isSelected) {
+      li.style.borderLeftColor = colorFor(seg.bug_types[0]).hex;
+      li.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    } else {
+      li.style.borderLeftColor = '';
+    }
+  });
+
+  // Show detail card
+  document.getElementById('detail-empty').classList.add('hidden');
+  const card = document.getElementById('detail-card');
+  card.classList.remove('hidden');
+
+  document.getElementById('detail-time').textContent =
+    `${fmtTime(seg.start)} – ${fmtTime(seg.end)}`;
+  document.getElementById('detail-duration').textContent =
+    `${seg.duration.toFixed(2)}s`;
+
+  const labelsDiv = document.getElementById('detail-labels');
+  labelsDiv.innerHTML = '';
+  seg.bug_types.forEach(bt => {
+    const c = colorFor(bt);
+    const badge = document.createElement('button');
+    badge.className = `px-3 py-1.5 rounded-lg text-sm font-medium cursor-pointer transition-opacity hover:opacity-80 border`;
+    badge.style.background = c.hex + '22';
+    badge.style.color = c.hex;
+    badge.style.borderColor = c.hex + '55';
+    badge.title = `Seek to ${fmtTime(seg.start)}`;
+    badge.innerHTML = `
+      <span class="inline-block w-2 h-2 rounded-full mr-1.5" style="background:${c.hex}"></span>
+      ${bugLabel(bt)}
+      <span class="ml-1.5 text-xs opacity-60 font-mono">${fmtTime(seg.start)}</span>
+    `;
+    badge.addEventListener('click', () => {
+      video.currentTime = seg.start;
+      video.play();
+    });
+    labelsDiv.appendChild(badge);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// New upload
+// ─────────────────────────────────────────────────────────────────
+document.getElementById('new-upload-btn').addEventListener('click', () => {
+  const video = document.getElementById('video-player');
+  video.pause();
+  video.src = '';
+  video.removeEventListener('timeupdate', onTimeUpdate);
+  state = { jobId: null, pollTimer: null, annotations: [], segments: [], selectedSegIdx: null, videoDuration: 0 };
+  selectedFile = null;
+  fileInfo.classList.add('hidden');
+  uploadErr.classList.add('hidden');
+  uploadBtn.classList.add('hidden');
+  uploadBtn.disabled = false;
+  uploadBtn.textContent = 'Analyze Video';
+  fileInput.value = '';
+  showPage('upload');
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Settings modal
+// ─────────────────────────────────────────────────────────────────
+const settingsModal   = document.getElementById('settings-modal');
+const ngrokInput      = document.getElementById('ngrok-input');
+const settingsStatus  = document.getElementById('settings-status');
+const kaggleIndicator = document.getElementById('kaggle-indicator');
+
+function updateKaggleIndicator() {
+  const active = isKaggleMode();
+  // gear button shifts right when dot is visible — keep them layered
+  kaggleIndicator.classList.toggle('hidden', !active);
+}
+
+document.getElementById('open-settings-btn').addEventListener('click', () => {
+  ngrokInput.value = localStorage.getItem('kaggle_ngrok_url') || '';
+  settingsStatus.classList.add('hidden');
+  settingsModal.classList.remove('hidden');
+});
+
+document.getElementById('settings-close').addEventListener('click', () => {
+  settingsModal.classList.add('hidden');
+});
+
+settingsModal.addEventListener('click', e => {
+  if (e.target === settingsModal) settingsModal.classList.add('hidden');
+});
+
+document.getElementById('settings-test').addEventListener('click', async () => {
+  const url = ngrokInput.value.trim().replace(/\/$/, '');
+  if (!url) {
+    showSettingsStatus('Enter a URL to test.', 'warn');
+    return;
+  }
+  showSettingsStatus('Testing…', 'info');
+  try {
+    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const data = await res.json();
+      showSettingsStatus(`✓ Connected — checkpoint: ${data.checkpoint || 'unknown'}`, 'ok');
+    } else {
+      showSettingsStatus(`Server responded with status ${res.status}`, 'error');
+    }
+  } catch (err) {
+    showSettingsStatus(`Connection failed: ${err.message}`, 'error');
+  }
+});
+
+document.getElementById('settings-save').addEventListener('click', () => {
+  const url = ngrokInput.value.trim().replace(/\/$/, '');
+  if (url) {
+    localStorage.setItem('kaggle_ngrok_url', url);
+    showSettingsStatus('Saved — using Kaggle inference server.', 'ok');
+  } else {
+    localStorage.removeItem('kaggle_ngrok_url');
+    showSettingsStatus('Cleared — using local backend.', 'info');
+  }
+  updateKaggleIndicator();
+  setTimeout(() => settingsModal.classList.add('hidden'), 900);
+});
+
+function showSettingsStatus(msg, type) {
+  const colors = {
+    ok:    'bg-green-900/40 text-green-300 border border-green-700',
+    error: 'bg-red-900/40 text-red-300 border border-red-700',
+    warn:  'bg-amber-900/40 text-amber-300 border border-amber-700',
+    info:  'bg-slate-700 text-slate-300',
+  };
+  settingsStatus.className = `mt-3 text-xs rounded-lg px-3 py-2 ${colors[type] || colors.info}`;
+  settingsStatus.textContent = msg;
+  settingsStatus.classList.remove('hidden');
+}
+
+// Show inference mode label on processing page
+function updateInferenceModeLabel() {
+  const el = document.getElementById('inference-mode-label');
+  if (!el) return;
+  el.textContent = isKaggleMode()
+    ? `Running on Kaggle — ${getAPI()}`
+    : 'Running on local backend';
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────────────────────────
+updateKaggleIndicator();
+showPage('upload');
+</script>
+</body>
+</html>

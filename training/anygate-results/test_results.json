@@ -1,0 +1,17 @@
+{
+  "test_loss": 0.3893632913762942,
+  "test_f1_types": 0.8082499512439757,
+  "test_f1_any": 0.9043219516760844,
+  "test_count_acc": 0.8198290598290598,
+  "test_f1_gated": 0.85776970797391,
+  "thresholds_used": {
+    "thr_any": 0.01,
+    "thr_map": {
+      "z-clipping": 0.8,
+      "corrupted_texture": 0.8,
+      "geometry_corruption": 0.7500000000000002,
+      "z-fighting": 0.8,
+      "boundary_hole": 0.7000000000000002
+    }
+  }
+}

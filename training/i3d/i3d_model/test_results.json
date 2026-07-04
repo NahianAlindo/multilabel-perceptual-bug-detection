@@ -1,0 +1,200 @@
+{
+  "test_loss": 2.7929068126841488,
+  "test_f1_types": 0.1954338335281628,
+  "test_acc_count": 0.07333333333333333,
+  "per_class_metrics": {
+    "z-clipping": {
+      "precision": 0.12393162393162394,
+      "recall": 1.0,
+      "f1": 0.22053231939163498
+    },
+    "corrupted_texture": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "geometry_corruption": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0
+    },
+    "z-fighting": {
+      "precision": 0.11393162393162393,
+      "recall": 1.0,
+      "f1": 0.2045576613212614
+    },
+    "boundary_hole": {
+      "precision": 0.11222222222222222,
+      "recall": 1.0,
+      "f1": 0.2017982017982018
+    }
+  },
+  "per_count_metrics": {
+    "0_bugs": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 7669.0
+    },
+    "1_bugs": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 2103.0
+    },
+    "2_bugs": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 1070.0
+    },
+    "3_bugs": {
+      "precision": 0.07333333333333333,
+      "recall": 1.0,
+      "f1": 0.13664596273291926,
+      "support": 858.0
+    }
+  },
+  "combo_metrics": [
+    {
+      "combo": "z-clipping+z-fighting+boundary_hole",
+      "precision": 0.008803418803418804,
+      "recall": 1.0,
+      "f1": 0.017453189866982972,
+      "count": 11700.0
+    },
+    {
+      "combo": "corrupted_texture",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 493.0
+    },
+    {
+      "combo": "z-clipping",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 466.0
+    },
+    {
+      "combo": "z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 417.0
+    },
+    {
+      "combo": "boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 388.0
+    },
+    {
+      "combo": "geometry_corruption",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 339.0
+    },
+    {
+      "combo": "z-fighting+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 140.0
+    },
+    {
+      "combo": "z-clipping+corrupted_texture",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 132.0
+    },
+    {
+      "combo": "corrupted_texture+geometry_corruption",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 122.0
+    },
+    {
+      "combo": "geometry_corruption+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 116.0
+    },
+    {
+      "combo": "z-clipping+z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 113.0
+    },
+    {
+      "combo": "z-clipping+geometry_corruption+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 106.0
+    },
+    {
+      "combo": "corrupted_texture+geometry_corruption+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 103.0
+    },
+    {
+      "combo": "z-clipping+corrupted_texture+geometry_corruption",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 102.0
+    },
+    {
+      "combo": "z-clipping+corrupted_texture+z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 101.0
+    },
+    {
+      "combo": "corrupted_texture+z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 95.0
+    },
+    {
+      "combo": "z-clipping+geometry_corruption",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 90.0
+    },
+    {
+      "combo": "z-clipping+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 89.0
+    },
+    {
+      "combo": "geometry_corruption+z-fighting",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 88.0
+    },
+    {
+      "combo": "corrupted_texture+boundary_hole",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "count": 85.0
+    }
+  ]
+}
