@@ -18,6 +18,8 @@ import time
 import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from functools import lru_cache
+from multiprocessing import Pool
 
 import numpy as np
 import torch
@@ -94,7 +96,12 @@ def set_seed(seed: int = SEED):
     torch.cuda.manual_seed_all(seed)
 
 def norm_bug_type(s: str) -> str:
-    return s.replace("_", "-").lower().strip()
+    # Canonical forms mix hyphens and underscores ("z-clipping" but
+    # "corrupted_texture"), so blanket replacement would break 3 of 5 classes.
+    s2 = s.strip().lower().replace(" ", "_").replace("-", "_")
+    if s2 == "z_clipping": return "z-clipping"
+    if s2 == "z_fighting": return "z-fighting"
+    return s2
 
 def load_frames_decord(video_path: str, start_sec: float, end_sec: float,
                         fps: float, img_size: int) -> Optional[torch.Tensor]:
@@ -162,6 +169,116 @@ def load_frames(video_path: str, start_sec: float, end_sec: float,
         n = max(1, int((end_sec - start_sec) * fps))
         frames = torch.zeros(n, 3, img_size, img_size)
     return frames
+
+# ── frame cache ───────────────────────────────────────────────────────────────
+# Each video is decoded ONCE at (fps, img_size) and stored as a uint8 .npy array
+# [T,H,W,3]; windows are then read as memory-mapped slices instead of opening
+# and seek-decoding the video for every window sample.
+
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+
+
+def frame_cache_name(rel_video_path: str) -> str:
+    key = rel_video_path.replace("\\", "/").strip("/")
+    key = os.path.splitext(key)[0].replace("/", "__")
+    return key + ".npy"
+
+
+@lru_cache(maxsize=None)
+def open_frame_cache(path: str):
+    return np.load(path, mmap_mode="r")
+
+
+def extract_frames_at_fps(video_path: str, target_fps: float = 8.0,
+                          img_size: int = 224) -> np.ndarray:
+    """Decode a full video once at target_fps, resized. Returns uint8 [T,H,W,3]."""
+    if DECORD_AVAILABLE:
+        try:
+            vr = VideoReader(video_path, ctx=cpu(0), width=img_size, height=img_size)
+            native_fps = float(vr.get_avg_fps()) or 25.0
+            stride = max(1, round(native_fps / target_fps))
+            indices = list(range(0, len(vr), stride))
+            batch = vr.get_batch(indices)
+            frames = batch.asnumpy() if hasattr(batch, "asnumpy") else batch.numpy()
+            return frames.astype(np.uint8)
+        except Exception:
+            pass
+    if CV2_AVAILABLE:
+        cap = cv2.VideoCapture(video_path)
+        native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        stride = max(1, round(native_fps / target_fps))
+        frames_list, idx = [], 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if idx % stride == 0:
+                frame = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), (img_size, img_size))
+                frames_list.append(frame)
+            idx += 1
+        cap.release()
+        if frames_list:
+            return np.stack(frames_list).astype(np.uint8)
+    raise RuntimeError("No video backend available. Install decord or opencv.")
+
+
+def _cache_one_video(task):
+    video_path, out_path, fps, img_size = task
+    out_path = Path(out_path)
+    if out_path.exists():
+        return (out_path.name, "cached")
+    try:
+        frames = extract_frames_at_fps(video_path, fps, img_size)
+        tmp = out_path.parent / (out_path.stem + f".tmp_{os.getpid()}.npy")
+        np.save(str(tmp), frames)
+        os.replace(str(tmp), str(out_path))  # atomic: no partial files on job kill
+        return (out_path.name, "ok")
+    except Exception as e:
+        return (out_path.name, f"fail: {e}")
+
+
+def ensure_frame_cache(video_list, video_root, cache_dir, fps=8.0, img_size=224, workers=4):
+    """Pre-extract any missing videos into the cache. Skips already-extracted
+    videos, so it is safe to call at the start of every run."""
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = cache_dir / "meta.json"
+    meta = {"fps": fps, "img_size": img_size}
+    if meta_path.exists():
+        with open(meta_path) as f:
+            existing = json.load(f)
+        if existing != meta:
+            raise RuntimeError(f"Frame cache {cache_dir} was built with {existing}, "
+                               f"but {meta} was requested. Use a different --frame-cache-dir.")
+    else:
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+
+    video_root = Path(video_root)
+    tasks = []
+    for vid in video_list:
+        vp = video_root / vid["video_path"]
+        if not vp.exists():
+            continue
+        out = cache_dir / frame_cache_name(vid["video_path"])
+        if not out.exists():
+            tasks.append((str(vp), str(out), fps, img_size))
+    if not tasks:
+        print(f"[cache] Frame cache complete for {len(video_list)} videos — skipping extraction.")
+        return
+    print(f"[cache] Extracting {len(tasks)}/{len(video_list)} missing videos to {cache_dir} "
+          f"with {workers} workers (one-time cost; future runs skip this)...", flush=True)
+    t0 = time.time()
+    n_fail = 0
+    with Pool(processes=max(1, workers)) as pool:
+        for i, (name, status) in enumerate(pool.imap_unordered(_cache_one_video, tasks), 1):
+            if status.startswith("fail"):
+                n_fail += 1
+                print(f"[cache] {name}: {status}")
+            if i % 10 == 0 or i == len(tasks):
+                print(f"[cache] {i}/{len(tasks)} done ({(time.time() - t0) / 60:.1f} min)", flush=True)
+    print(f"[cache] Finished in {(time.time() - t0) / 60:.1f} min | failed: {n_fail}")
 
 # ── losses ────────────────────────────────────────────────────────────────────
 class AsymmetricLoss(nn.Module):
@@ -408,23 +525,33 @@ class TemporalWindowDataset(Dataset):
                  img_size: int = 224,
                  window_sec: float = 4.0,
                  stride_sec: float = 1.0,
-                 split: str = "train"):
+                 split: str = "train",
+                 frame_cache_dir: Optional[str] = None):
         self.video_root = video_root
         self.fps = fps
         self.img_size = img_size
         self.window_sec = window_sec
         self.stride_sec = stride_sec
         self.split = split
+        self.frame_cache_dir = frame_cache_dir
         self.class_to_idx = {c: i for i, c in enumerate(CANON_BUG_TYPES)}
 
         self.windows: List[Dict] = []
         self._build_windows(video_list)
 
     def _build_windows(self, video_list):
+        n_cached = n_videos = 0
         for vid in video_list:
             vp = os.path.join(self.video_root, vid["video_path"])
             if not os.path.exists(vp):
                 continue
+            n_videos += 1
+            cache_path = None
+            if self.frame_cache_dir:
+                cp = os.path.join(self.frame_cache_dir, frame_cache_name(vid["video_path"]))
+                if os.path.exists(cp):
+                    cache_path = cp
+                    n_cached += 1
             dur = vid.get("duration", 60.0)
             anns = vid.get("annotations", [])
 
@@ -478,6 +605,7 @@ class TemporalWindowDataset(Dataset):
 
                 self.windows.append({
                     "video_path":   vp,
+                    "cache_path":   cache_path,
                     "win_start":    win_s,
                     "win_end":      win_e,
                     "n_frames":     n_frames,
@@ -488,14 +616,30 @@ class TemporalWindowDataset(Dataset):
                     "win_label":    win_label,
                 })
                 t += self.stride_sec
+        if self.frame_cache_dir:
+            print(f"[dataset:{self.split}] frame cache: {n_cached}/{n_videos} videos "
+                  f"(uncached videos use slow per-window decoding)")
 
     def __len__(self):
         return len(self.windows)
 
     def __getitem__(self, idx):
         w = self.windows[idx]
-        frames = load_frames(w["video_path"], w["win_start"], w["win_end"],
-                             self.fps, self.img_size)
+        frames = None
+        if w.get("cache_path"):
+            # Fast path: memmap slice from the pre-extracted frame cache
+            try:
+                arr = open_frame_cache(w["cache_path"])
+                f_start = int(w["win_start"] * self.fps)
+                sl = np.asarray(arr[f_start: f_start + w["n_frames"]])
+                frames = torch.from_numpy(np.ascontiguousarray(sl)) \
+                              .permute(0, 3, 1, 2).float().div_(255.0)
+                frames = (frames - IMAGENET_MEAN) / IMAGENET_STD
+            except Exception:
+                frames = None
+        if frames is None:
+            frames = load_frames(w["video_path"], w["win_start"], w["win_end"],
+                                 self.fps, self.img_size)
         # Pad/crop to n_frames
         T = w["n_frames"]
         if frames.shape[0] < T:
@@ -968,18 +1112,22 @@ def hpo_objective(trial, args, train_vids, val_vids, device):
     train_ds = TemporalWindowDataset(train_vids, args.video_root,
                                      fps=args.fps, img_size=args.img_size,
                                      window_sec=args.window_sec,
-                                     stride_sec=stride_sec, split="train")
+                                     stride_sec=stride_sec, split="train",
+                                     frame_cache_dir=args.frame_cache_dir)
     val_ds   = TemporalWindowDataset(val_vids, args.video_root,
                                      fps=args.fps, img_size=args.img_size,
                                      window_sec=args.window_sec,
-                                     stride_sec=stride_sec, split="val")
+                                     stride_sec=stride_sec, split="val",
+                                     frame_cache_dir=args.frame_cache_dir)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
                               num_workers=args.num_workers, collate_fn=collate_fn,
-                              pin_memory=True, drop_last=True)
+                              pin_memory=True, drop_last=True,
+                              persistent_workers=args.num_workers > 0)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
                               num_workers=args.num_workers, collate_fn=collate_fn,
-                              pin_memory=True)
+                              pin_memory=True,
+                              persistent_workers=args.num_workers > 0)
 
     asl_fn    = AsymmetricLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -1010,6 +1158,10 @@ def run_train(args):
     set_seed(SEED)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"[INFO] Device: {device}")
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.logdir,   exist_ok=True)
@@ -1027,7 +1179,7 @@ def run_train(args):
     with open(args.temporal_dataset) as f:
         dataset = json.load(f)
 
-    splits   = dataset.get("splits", {})
+    splits   = dataset.get("metadata", {}).get("splits", dataset.get("splits", {}))
     all_vids = {v["video_id"]: v for v in dataset.get("videos", [])}
 
     train_ids = splits.get("train", [])
@@ -1040,22 +1192,35 @@ def run_train(args):
 
     print(f"[INFO] Dataset: {len(train_vids)} train / {len(val_vids)} val / {len(test_vids)} test")
 
+    # Build/verify the frame cache BEFORE training (no-op once complete)
+    if args.frame_cache_dir:
+        ensure_frame_cache(train_vids + val_vids + test_vids, args.video_root,
+                           args.frame_cache_dir, fps=args.fps, img_size=args.img_size,
+                           workers=max(args.num_workers, 4))
+    else:
+        print("[WARN] --frame-cache-dir not set — every window sample will open and "
+              "seek-decode its source video (slow). Strongly consider setting it.")
+
     # ── pilot mode ────────────────────────────────────────────────────────────
     if args.pilot:
         print("[INFO] PILOT MODE — 5 epochs, no HPO")
         model = PyramidTransformerLocalization(backbone_name=args.backbone).to(device)
         train_ds = TemporalWindowDataset(train_vids, args.video_root, fps=args.fps,
                                          img_size=args.img_size, window_sec=args.window_sec,
-                                         stride_sec=args.stride_sec, split="train")
+                                         stride_sec=args.stride_sec, split="train",
+                                         frame_cache_dir=args.frame_cache_dir)
         val_ds   = TemporalWindowDataset(val_vids, args.video_root, fps=args.fps,
                                          img_size=args.img_size, window_sec=args.window_sec,
-                                         stride_sec=args.stride_sec, split="val")
+                                         stride_sec=args.stride_sec, split="val",
+                                         frame_cache_dir=args.frame_cache_dir)
         train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,
                                   num_workers=args.num_workers, collate_fn=collate_fn,
-                                  pin_memory=True, drop_last=True)
+                                  pin_memory=True, drop_last=True,
+                                  persistent_workers=args.num_workers > 0)
         val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False,
                                   num_workers=args.num_workers, collate_fn=collate_fn,
-                                  pin_memory=True)
+                                  pin_memory=True,
+                                  persistent_workers=args.num_workers > 0)
         asl_fn    = AsymmetricLoss()
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
         scaler    = torch.cuda.amp.GradScaler()
@@ -1150,16 +1315,20 @@ def run_train(args):
 
     train_ds = TemporalWindowDataset(train_vids, args.video_root, fps=args.fps,
                                      img_size=args.img_size, window_sec=args.window_sec,
-                                     stride_sec=stride_sec, split="train")
+                                     stride_sec=stride_sec, split="train",
+                                     frame_cache_dir=args.frame_cache_dir)
     val_ds   = TemporalWindowDataset(val_vids, args.video_root, fps=args.fps,
                                      img_size=args.img_size, window_sec=args.window_sec,
-                                     stride_sec=stride_sec, split="val")
+                                     stride_sec=stride_sec, split="val",
+                                     frame_cache_dir=args.frame_cache_dir)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
                               num_workers=args.num_workers, collate_fn=collate_fn,
-                              pin_memory=True, drop_last=True)
+                              pin_memory=True, drop_last=True,
+                              persistent_workers=args.num_workers > 0)
     val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False,
                               num_workers=args.num_workers, collate_fn=collate_fn,
-                              pin_memory=True)
+                              pin_memory=True,
+                              persistent_workers=args.num_workers > 0)
 
     asl_fn    = AsymmetricLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -1242,10 +1411,12 @@ def run_train(args):
     print("\n[INFO] Running test set evaluation with all 3 best checkpoints...")
     test_ds = TemporalWindowDataset(test_vids, args.video_root, fps=args.fps,
                                     img_size=args.img_size, window_sec=args.window_sec,
-                                    stride_sec=stride_sec, split="test")
+                                    stride_sec=stride_sec, split="test",
+                                    frame_cache_dir=args.frame_cache_dir)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False,
                              num_workers=args.num_workers, collate_fn=collate_fn,
-                             pin_memory=True)
+                             pin_memory=True,
+                             persistent_workers=args.num_workers > 0)
 
     all_test_results = {}
     for ckpt_name in ["best_composite", "best_f1", "best_mAP"]:
@@ -1361,6 +1532,10 @@ def parse_args():
     p.add_argument("--video-root",       default="")
     p.add_argument("--temporal-dataset", default="")
     p.add_argument("--video-path",       default="")   # infer only
+    p.add_argument("--frame-cache-dir",  default=None,
+                   help="Dir for pre-extracted uint8 frame .npy files. Missing videos "
+                        "are extracted automatically before training (one-time), then "
+                        "windows are read as memmap slices instead of decoding video.")
     # training
     p.add_argument("--save-dir",         default="checkpoints")
     p.add_argument("--logdir",           default="logs")

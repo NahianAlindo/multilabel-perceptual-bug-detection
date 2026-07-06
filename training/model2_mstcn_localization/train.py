@@ -22,6 +22,8 @@ import os, sys, json, math, time, argparse, random, shutil
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
+from functools import lru_cache
+from multiprocessing import Pool
 
 import numpy as np
 import torch
@@ -120,6 +122,107 @@ def get_transform(img_size: int = 224):
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
+
+# ── Frame cache ───────────────────────────────────────────────────────────────
+# Each video is decoded ONCE at (fps, img_size) and stored as a uint8 .npy array
+# [T,H,W,3]; chunks are then read as memory-mapped slices instead of re-decoding
+# the full video for every chunk sample.
+
+def frame_cache_name(rel_video_path: str) -> str:
+    key = rel_video_path.replace("\\", "/").strip("/")
+    key = os.path.splitext(key)[0].replace("/", "__")
+    return key + ".npy"
+
+
+@lru_cache(maxsize=None)
+def open_frame_cache(path: str):
+    return np.load(path, mmap_mode="r")
+
+
+def _cache_one_video(task):
+    video_path, out_path, fps, img_size = task
+    out_path = Path(out_path)
+    if out_path.exists():
+        return (out_path.name, "cached")
+    try:
+        frames, _ = extract_frames_at_fps(video_path, fps, img_size)
+        tmp = out_path.parent / (out_path.stem + f".tmp_{os.getpid()}.npy")
+        np.save(str(tmp), frames)
+        os.replace(str(tmp), str(out_path))  # atomic: no partial files on job kill
+        return (out_path.name, "ok")
+    except Exception as e:
+        return (out_path.name, f"fail: {e}")
+
+
+def ensure_frame_cache(video_list, video_root, cache_dir, fps=8.0, img_size=224, workers=4):
+    """Pre-extract any missing videos into the cache. Skips already-extracted
+    videos, so it is safe to call at the start of every run."""
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    meta_path = cache_dir / "meta.json"
+    meta = {"fps": fps, "img_size": img_size}
+    if meta_path.exists():
+        with open(meta_path) as f:
+            existing = json.load(f)
+        if existing != meta:
+            raise RuntimeError(f"Frame cache {cache_dir} was built with {existing}, "
+                               f"but {meta} was requested. Use a different --frame-cache-dir.")
+    else:
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+
+    video_root = Path(video_root)
+    tasks = []
+    for vid in video_list:
+        vp = video_root / vid["video_path"]
+        if not vp.exists():
+            continue
+        out = cache_dir / frame_cache_name(vid["video_path"])
+        if not out.exists():
+            tasks.append((str(vp), str(out), fps, img_size))
+    if not tasks:
+        print(f"[cache] Frame cache complete for {len(video_list)} videos — skipping extraction.")
+        return
+    print(f"[cache] Extracting {len(tasks)}/{len(video_list)} missing videos to {cache_dir} "
+          f"with {workers} workers (one-time cost; future runs skip this)...", flush=True)
+    t0 = time.time()
+    n_fail = 0
+    with Pool(processes=max(1, workers)) as pool:
+        for i, (name, status) in enumerate(pool.imap_unordered(_cache_one_video, tasks), 1):
+            if status.startswith("fail"):
+                n_fail += 1
+                print(f"[cache] {name}: {status}")
+            if i % 10 == 0 or i == len(tasks):
+                print(f"[cache] {i}/{len(tasks)} done ({(time.time() - t0) / 60:.1f} min)", flush=True)
+    print(f"[cache] Finished in {(time.time() - t0) / 60:.1f} min | failed: {n_fail}")
+
+
+def load_video_frames_for_eval(video_path: str, rel_path: str, args):
+    """Full-video frames for eval: memmapped from the frame cache when available,
+    otherwise decoded once. Returns (frames [T,H,W,3] uint8, duration_sec)."""
+    cache_dir = getattr(args, "frame_cache_dir", None)
+    if cache_dir:
+        cp = Path(cache_dir) / frame_cache_name(rel_path)
+        if cp.exists():
+            arr = open_frame_cache(str(cp))
+            return arr, arr.shape[0] / args.fps
+    return extract_frames_at_fps(video_path, args.fps, args.img_size)
+
+
+# ── GPU-side normalization ────────────────────────────────────────────────────
+
+_norm_stats = {}
+
+def normalize_frames_gpu(frames_u8: torch.Tensor, device) -> torch.Tensor:
+    """uint8 [B,T,H,W,3] on CPU → normalized float32 [B,T,3,H,W] on device."""
+    key = str(device)
+    if key not in _norm_stats:
+        mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 1, 3, 1, 1)
+        _norm_stats[key] = (mean, std)
+    mean, std = _norm_stats[key]
+    x = frames_u8.to(device, non_blocking=True).permute(0, 1, 4, 2, 3).float().div_(255.0)
+    return x.sub_(mean).div_(std)
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -234,41 +337,64 @@ class FrameSegDataset(Dataset):
     Videos are chunked to max_frames to fit in GPU memory.
     """
     def __init__(self, video_list, video_root, fps=8.0, img_size=224,
-                 max_frames=512, transform=None):
+                 max_frames=512, transform=None, frame_cache_dir=None):
         self.video_root = Path(video_root)
         self.fps = fps; self.img_size = img_size; self.max_frames = max_frames
         self.transform = transform or get_transform(img_size)
-        self.samples = []  # (video_path, annotations, chunk_start_frame, chunk_end_frame, duration)
+        self.frame_cache_dir = frame_cache_dir
+        self.samples = []  # (video_path, annotations, chunk_start_frame, chunk_end_frame, cache_path)
         self._build_index(video_list)
 
     def _build_index(self, video_list):
+        n_cached = n_videos = 0
         for vid in video_list:
             vp = self.video_root / vid["video_path"]
             if not vp.exists(): continue
+            n_videos += 1
+            cache_path = None
+            if self.frame_cache_dir:
+                cp = Path(self.frame_cache_dir) / frame_cache_name(vid["video_path"])
+                if cp.exists():
+                    cache_path = str(cp)
+                    n_cached += 1
             duration = float(vid.get("duration", 0))
             total_frames = int(duration * self.fps)
             anns = vid.get("annotations", [])
             for start_f in range(0, max(1, total_frames), self.max_frames):
                 end_f = min(start_f + self.max_frames, total_frames)
-                self.samples.append((str(vp), anns, start_f, end_f, total_frames))
+                self.samples.append((str(vp), anns, start_f, end_f, cache_path))
+        if self.frame_cache_dir:
+            print(f"[dataset] frame cache: {n_cached}/{n_videos} videos "
+                  f"(uncached videos decode the full video per chunk — slow)")
 
     def __len__(self): return len(self.samples)
 
     def __getitem__(self, idx):
-        vp, anns, start_f, end_f, total_frames = self.samples[idx]
-        try:
-            frames_np, duration = extract_frames_at_fps(vp, self.fps, self.img_size)
-        except Exception:
-            T = end_f - start_f
-            return (torch.zeros(T, 3, self.img_size, self.img_size),
-                    torch.zeros(T, NUM_CLASSES))
+        vp, anns, start_f, end_f, cache_path = self.samples[idx]
 
-        chunk = frames_np[start_f:end_f]
+        # Fast path: memory-mapped slice from the pre-extracted frame cache
+        chunk = None
+        if cache_path:
+            try:
+                arr = open_frame_cache(cache_path)
+                chunk = np.asarray(arr[start_f:end_f])
+            except Exception:
+                chunk = None
+        if chunk is None:
+            try:
+                frames_np, _ = extract_frames_at_fps(vp, self.fps, self.img_size)
+                chunk = frames_np[start_f:end_f]
+            except Exception:
+                T = max(1, end_f - start_f)
+                return (torch.zeros(T, self.img_size, self.img_size, 3, dtype=torch.uint8),
+                        torch.zeros(T, NUM_CLASSES))
+
         T = len(chunk)
         if T == 0:
             chunk = np.zeros((1, self.img_size, self.img_size, 3), dtype=np.uint8)
             T = 1
-        frames_t = torch.stack([self.transform(f) for f in chunk])  # [T,3,H,W]
+        # uint8 [T,H,W,3] — normalized batched on GPU via normalize_frames_gpu()
+        frames_t = torch.from_numpy(np.ascontiguousarray(chunk))
 
         # Per-frame multi-label GT
         labels = np.zeros((T, NUM_CLASSES), dtype=np.float32)
@@ -288,11 +414,11 @@ class FrameSegDataset(Dataset):
 
 
 def collate_variable_length(batch):
-    """Pad sequences in batch to the same length."""
+    """Pad uint8 [T,H,W,3] sequences in batch to the same length."""
     frames_list, labels_list = zip(*batch)
     max_T = max(f.shape[0] for f in frames_list)
-    H, W = frames_list[0].shape[2], frames_list[0].shape[3]
-    padded_frames = torch.zeros(len(batch), max_T, 3, H, W)
+    H, W = frames_list[0].shape[1], frames_list[0].shape[2]
+    padded_frames = torch.zeros(len(batch), max_T, H, W, 3, dtype=torch.uint8)
     padded_labels = torch.zeros(len(batch), max_T, NUM_CLASSES)
     masks = torch.zeros(len(batch), max_T, dtype=torch.bool)
     for i, (f, l) in enumerate(zip(frames_list, labels_list)):
@@ -510,15 +636,17 @@ def manage_epoch_checkpoints(d: Path, keep=3):
 # ── Train / val one epoch ─────────────────────────────────────────────────────
 
 def train_one_epoch(model, loader, optimizer, asl_loss, device,
-                    lambda_smooth, epoch, tb_writer=None):
+                    lambda_smooth, epoch, tb_writer=None, use_amp=False):
     model.train()
     total_loss = total_cls = total_smooth = 0.0
     for frames, labels, masks in tqdm(loader, desc=f"Epoch {epoch}", leave=False):
-        frames = frames.to(device)
-        labels = labels.to(device)   # [B,T,C]
-        masks = masks.to(device)     # [B,T]
+        frames = normalize_frames_gpu(frames, device)
+        labels = labels.to(device, non_blocking=True)   # [B,T,C]
+        masks = masks.to(device, non_blocking=True)     # [B,T]
 
-        outputs = model(frames)  # list of [B,C,T]
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+            outputs = model(frames)  # list of [B,C,T]
+        outputs = [o.float() for o in outputs]  # losses in fp32
 
         loss = torch.tensor(0.0, device=device)
         for out in outputs:
@@ -542,12 +670,17 @@ def train_one_epoch(model, loader, optimizer, asl_loss, device,
 
 
 @torch.no_grad()
-def validate(model, loader, asl_loss, device, lambda_smooth, epoch, tb_writer=None):
+def validate(model, loader, asl_loss, device, lambda_smooth, epoch, tb_writer=None,
+             use_amp=False):
     model.eval()
     total_loss = 0.0; all_prob = []; all_gt = []
     for frames, labels, masks in loader:
-        frames = frames.to(device); labels = labels.to(device); masks = masks.to(device)
-        outputs = model(frames)
+        frames = normalize_frames_gpu(frames, device)
+        labels = labels.to(device, non_blocking=True)
+        masks = masks.to(device, non_blocking=True)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+            outputs = model(frames)
+        outputs = [o.float() for o in outputs]
         out = outputs[-1]  # use last stage for metrics
         out_t = out.permute(0, 2, 1)
         valid_out = out_t[masks]; valid_lbl = labels[masks]
@@ -580,12 +713,14 @@ def validate(model, loader, asl_loss, device, lambda_smooth, epoch, tb_writer=No
 @torch.no_grad()
 def run_test(model, args, device, thresholds, out_dir: Path, tb_writer=None, wandb_run=None):
     with open(args.temporal_dataset) as f: dataset = json.load(f)
-    splits = dataset.get("splits", {})
+    splits = dataset.get("metadata", {}).get("splits", dataset.get("splits", {}))
     test_ids = set(splits.get("test", []))
     test_videos = [v for v in dataset["videos"] if v["video_id"] in test_ids]
     print(f"[test] {len(test_videos)} test videos")
 
-    transform = get_transform(args.img_size)
+    dev_type = device.type if isinstance(device, torch.device) else str(device).split(":")[0]
+    use_amp = (dev_type == "cuda" and not getattr(args, "no_amp", False)
+               and torch.cuda.is_bf16_supported())
     model.eval()
     pred_by_class = defaultdict(list); gt_by_class = defaultdict(list)
     all_prob = []; all_gt_cls = []; per_video_results = []
@@ -594,20 +729,21 @@ def run_test(model, args, device, thresholds, out_dir: Path, tb_writer=None, wan
         vp = Path(args.video_root) / vid["video_path"]
         if not vp.exists(): continue
         anns = vid.get("annotations", [])
-        try: frames_np, duration = extract_frames_at_fps(str(vp), args.fps, args.img_size)
+        try: frames_np, duration = load_video_frames_for_eval(str(vp), vid["video_path"], args)
         except Exception as e: print(f"[WARN] {vid['video_id']}: {e}"); continue
 
         T = len(frames_np)
-        frames_t = torch.stack([transform(f) for f in frames_np]).unsqueeze(0).to(device)  # [1,T,3,H,W]
 
-        # Process in chunks if sequence too long
+        # Process in chunks (kept on CPU as uint8; each chunk normalized on GPU)
         chunk = 512
         frame_probs = np.zeros((T, NUM_CLASSES), dtype=np.float32)
         for t0 in range(0, T, chunk):
             t1 = min(t0 + chunk, T)
-            chunk_t = frames_t[:, t0:t1]
-            outputs = model(chunk_t)
-            probs = torch.sigmoid(outputs[-1]).squeeze(0).permute(1, 0).cpu().numpy()  # [t,C]
+            chunk_u8 = torch.from_numpy(np.ascontiguousarray(frames_np[t0:t1])).unsqueeze(0)
+            chunk_t = normalize_frames_gpu(chunk_u8, device)  # [1,t,3,H,W]
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+                outputs = model(chunk_t)
+            probs = torch.sigmoid(outputs[-1].float()).squeeze(0).permute(1, 0).cpu().numpy()  # [t,C]
             frame_probs[t0:t1] = probs
 
         # Per-frame GT for clip metrics
@@ -679,6 +815,13 @@ def run_test(model, args, device, thresholds, out_dir: Path, tb_writer=None, wan
 
 def run_train(args):
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+    use_amp = (device.type == "cuda" and not args.no_amp
+               and torch.cuda.is_bf16_supported())
+    print(f"[train] Mixed precision (bf16): {'enabled' if use_amp else 'disabled'}")
     checkpoint_dir = Path(args.save_dir); checkpoint_dir.mkdir(parents=True, exist_ok=True)
     log_dir = Path(args.logdir); (log_dir / "tensorboard").mkdir(parents=True, exist_ok=True)
     tb = SummaryWriter(str(log_dir / "tensorboard"))
@@ -692,11 +835,26 @@ def run_train(args):
                                config=vars(args), tags=["model2", "mstcn", "localization"])
 
     with open(args.temporal_dataset) as f: dataset = json.load(f)
-    splits = dataset.get("splits", {})
+    splits = dataset.get("metadata", {}).get("splits", dataset.get("splits", {}))
     all_videos = {v["video_id"]: v for v in dataset["videos"]}
     train_vids = [all_videos[i] for i in splits.get("train", []) if i in all_videos]
     val_vids = [all_videos[i] for i in splits.get("val", []) if i in all_videos]
     print(f"[train] Train: {len(train_vids)} | Val: {len(val_vids)}")
+
+    # Build/verify the frame cache BEFORE training (no-op once complete)
+    if args.frame_cache_dir:
+        test_vids_cache = [all_videos[i] for i in splits.get("test", []) if i in all_videos]
+        ensure_frame_cache(train_vids + val_vids + test_vids_cache, args.video_root,
+                           args.frame_cache_dir, fps=args.fps, img_size=args.img_size,
+                           workers=max(args.num_workers, 4))
+    else:
+        print("[train] WARNING: --frame-cache-dir not set — every chunk sample will "
+              "decode its full source video (extremely slow). Strongly consider setting it.")
+
+    loader_kwargs = dict(num_workers=args.num_workers, collate_fn=collate_variable_length,
+                         pin_memory=True)
+    if args.num_workers > 0:
+        loader_kwargs.update(persistent_workers=True, prefetch_factor=2)
 
     hparams = {"lr": args.lr, "lambda_smooth": args.lambda_smooth,
                "dropout": 0.0, "weight_decay": args.weight_decay,
@@ -724,22 +882,22 @@ def run_train(args):
             m = MSTCNLocalization(num_f_maps=int(hp["num_f_maps"])).to(device)
             opt = torch.optim.AdamW(m.parameters(), lr=hp["lr"], weight_decay=hp["weight_decay"])
             asl = AsymmetricLoss()
-            ds_t = FrameSegDataset(train_vids[:30], args.video_root, fps=args.fps, img_size=args.img_size)
-            ds_v = FrameSegDataset(val_vids[:10], args.video_root, fps=args.fps, img_size=args.img_size)
-            tl = DataLoader(ds_t, batch_size=int(hp["batch_size"]), shuffle=True,
-                            num_workers=2, collate_fn=collate_variable_length)
-            vl = DataLoader(ds_v, batch_size=int(hp["batch_size"]), shuffle=False,
-                            num_workers=2, collate_fn=collate_variable_length)
+            ds_t = FrameSegDataset(train_vids[:30], args.video_root, fps=args.fps,
+                                   img_size=args.img_size, frame_cache_dir=args.frame_cache_dir)
+            ds_v = FrameSegDataset(val_vids[:10], args.video_root, fps=args.fps,
+                                   img_size=args.img_size, frame_cache_dir=args.frame_cache_dir)
+            tl = DataLoader(ds_t, batch_size=int(hp["batch_size"]), shuffle=True, **loader_kwargs)
+            vl = DataLoader(ds_v, batch_size=int(hp["batch_size"]), shuffle=False, **loader_kwargs)
             es = MultiTaskEarlyStopping(patience=4)
             for ep in range(1, 9):
-                train_one_epoch(m, tl, opt, asl, device, hp["lambda_smooth"], ep)
-                vm = validate(m, vl, asl, device, hp["lambda_smooth"], ep)
+                train_one_epoch(m, tl, opt, asl, device, hp["lambda_smooth"], ep, use_amp=use_amp)
+                vm = validate(m, vl, asl, device, hp["lambda_smooth"], ep, use_amp=use_amp)
                 comp = 0.3 * vm["micro_f1"] + 0.7 * vm["clip_mAP_proxy"]
                 trial.report(comp, ep)
                 if trial.should_prune(): raise optuna.exceptions.TrialPruned()
                 stop, _ = es.step(vm["micro_f1"], vm["clip_mAP_proxy"], opt.param_groups[0]["lr"])
                 if stop: break
-            vm = validate(m, vl, asl, device, hp["lambda_smooth"], 0)
+            vm = validate(m, vl, asl, device, hp["lambda_smooth"], 0, use_amp=use_amp)
             return 0.3 * vm["micro_f1"] + 0.7 * vm["clip_mAP_proxy"]
 
         for _ in range(remaining):
@@ -756,14 +914,14 @@ def run_train(args):
             json.dump(study.best_params, f, indent=2)
 
     # Build full dataset / model
-    train_ds = FrameSegDataset(train_vids, args.video_root, fps=args.fps, img_size=args.img_size)
-    val_ds = FrameSegDataset(val_vids, args.video_root, fps=args.fps, img_size=args.img_size)
+    train_ds = FrameSegDataset(train_vids, args.video_root, fps=args.fps, img_size=args.img_size,
+                               frame_cache_dir=args.frame_cache_dir)
+    val_ds = FrameSegDataset(val_vids, args.video_root, fps=args.fps, img_size=args.img_size,
+                             frame_cache_dir=args.frame_cache_dir)
     train_loader = DataLoader(train_ds, batch_size=int(hparams["batch_size"]), shuffle=True,
-                              num_workers=args.num_workers, collate_fn=collate_variable_length,
-                              pin_memory=True)
+                              **loader_kwargs)
     val_loader = DataLoader(val_ds, batch_size=int(hparams["batch_size"]), shuffle=False,
-                            num_workers=args.num_workers, collate_fn=collate_variable_length,
-                            pin_memory=True)
+                            **loader_kwargs)
 
     model = MSTCNLocalization(num_f_maps=int(hparams.get("num_f_maps", 64))).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=hparams["lr"],
@@ -789,9 +947,10 @@ def run_train(args):
 
     for epoch in range(start_epoch, max_epochs + 1):
         train_m = train_one_epoch(model, train_loader, optimizer, asl_loss, device,
-                                   hparams.get("lambda_smooth", 0.15), epoch, tb)
+                                   hparams.get("lambda_smooth", 0.15), epoch, tb,
+                                   use_amp=use_amp)
         val_m = validate(model, val_loader, asl_loss, device,
-                         hparams.get("lambda_smooth", 0.15), epoch, tb)
+                         hparams.get("lambda_smooth", 0.15), epoch, tb, use_amp=use_amp)
         composite = 0.3 * val_m["micro_f1"] + 0.7 * val_m["clip_mAP_proxy"]
         scheduler.step(composite)
         lr = optimizer.param_groups[0]["lr"]
@@ -843,17 +1002,20 @@ def run_infer(args):
     model = MSTCNLocalization().to(device)
     model.load_state_dict(ckpt.get("model_state", ckpt)); model.eval()
 
-    transform = get_transform(args.img_size)
+    use_amp = (device.type == "cuda" and not getattr(args, "no_amp", False)
+               and torch.cuda.is_bf16_supported())
     frames_np, duration = extract_frames_at_fps(args.video_path, args.fps, args.img_size)
     T = len(frames_np)
-    frames_t = torch.stack([transform(f) for f in frames_np]).unsqueeze(0).to(device)
 
     frame_probs = np.zeros((T, NUM_CLASSES), dtype=np.float32)
     chunk = 512
     for t0 in range(0, T, chunk):
         t1 = min(t0 + chunk, T)
-        outputs = model(frames_t[:, t0:t1])
-        frame_probs[t0:t1] = torch.sigmoid(outputs[-1]).squeeze(0).permute(1, 0).cpu().numpy()
+        chunk_u8 = torch.from_numpy(np.ascontiguousarray(frames_np[t0:t1])).unsqueeze(0)
+        chunk_t = normalize_frames_gpu(chunk_u8, device)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+            outputs = model(chunk_t)
+        frame_probs[t0:t1] = torch.sigmoid(outputs[-1].float()).squeeze(0).permute(1, 0).cpu().numpy()
 
     segments = frames_to_segments(frame_probs, args.fps,
                                    min_conf=getattr(args, "min_conf", 0.0),
@@ -890,6 +1052,12 @@ def parse_args():
     ap.add_argument("--num-f-maps", type=int, default=64)
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--device", type=str, default="cuda")
+    ap.add_argument("--frame-cache-dir", type=str, default=None,
+                    help="Dir for pre-extracted uint8 frame .npy files. Missing videos "
+                         "are extracted automatically before training (one-time), then "
+                         "chunks are read as memmap slices instead of decoding video.")
+    ap.add_argument("--no-amp", action="store_true",
+                    help="Disable bf16 mixed precision (enabled by default on CUDA)")
     ap.add_argument("--pilot", action="store_true")
     ap.add_argument("--hpo-trials", type=int, default=0)
     ap.add_argument("--min-conf", type=float, default=0.0)

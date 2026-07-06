@@ -1,6 +1,7 @@
 #!/bin/bash
-#SBATCH --account=def-loutfouz
-#SBATCH --gres=gpu:1
+#SBATCH --account=def-loutfouz_gpu
+#SBATCH --partition=gpubase_bygpu_b4
+#SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --time=2-00:00:00
@@ -35,11 +36,17 @@ echo "=============================================="
 # Paths — edit before submitting
 # ==============================================================================
 
-SCRIPT_DIR="/home/nahian26/projects/def-loutfouz/nahian26/bugdatasetbig/model3_pyramid_transformer"
-VIDEO_ROOT="/home/nahian26/scratch/videos"
-DATASET="/home/nahian26/scratch/localization/temporal_bug_dataset.json"
-CHECKPOINT_DIR="$SCRIPT_DIR/checkpoints"
-LOGDIR="$SCRIPT_DIR/logs"
+# Repo clone on scratch — `git pull` there updates the code this job runs
+REPO_DIR="/home/nahian26/scratch/multilabel-perceptual-bug-detection"
+SCRIPT_DIR="$REPO_DIR/training/model3_pyramid_transformer"
+# Game subfolders (fnafautobug2/, mkartautobug2/, ...) sit directly under scratch
+VIDEO_ROOT="/home/nahian26/scratch"
+DATASET="/home/nahian26/scratch/temporal_bug_dataset.json"
+CHECKPOINT_DIR="/home/nahian26/scratch/checkpoints/model3_pyramid_transformer"
+LOGDIR="/home/nahian26/scratch/runs/model3_pyramid_transformer"
+# Pre-extracted frame cache (shared by all 3 models; ~66 GB for 263 videos).
+# train.py builds any missing entries automatically on first run, then skips.
+FRAME_CACHE_DIR="/home/nahian26/scratch/frame_cache_fps8_224"
 
 echo ""
 echo "Paths:"
@@ -48,6 +55,7 @@ echo "  Video root  : $VIDEO_ROOT"
 echo "  Dataset     : $DATASET"
 echo "  Checkpoints : $CHECKPOINT_DIR"
 echo "  Logs        : $LOGDIR"
+echo "  Frame cache : $FRAME_CACHE_DIR"
 echo "=============================================="
 
 # ==============================================================================
@@ -58,8 +66,9 @@ echo ""
 echo "Loading modules..."
 module load python/3.10
 echo "  ✓ Python 3.10"
-module load gcc/12.3.1 opencv/4.8.1
-echo "  ✓ GCC 12.3.1 + OpenCV 4.8.1"
+module load gcc/12.3 opencv/4.8.1 2>/dev/null || module load gcc/12.3.1 opencv/4.8.1 2>/dev/null || \
+    module load gcc opencv/4.8.1 2>/dev/null || echo "  ⚠️  OpenCV module optional"
+echo "  ✓ GCC + OpenCV (if available)"
 
 echo ""
 echo "Activating virtual environment..."
@@ -72,16 +81,36 @@ else
 fi
 
 echo ""
-echo "Testing OpenCV..."
+echo "Checking Python packages (installing any missing ones)..."
+ensure_pkg () {
+    # $1 = import name, $2 = pip package name
+    if python -c "import $1" 2>/dev/null; then
+        echo "  ✓ $2"
+    else
+        echo "  ⚠ $2 missing — installing..."
+        pip install --no-index "$2" 2>/dev/null || pip install "$2" || \
+            echo "  ❌ Could not install $2 (continuing — a fallback may exist)"
+    fi
+}
+ensure_pkg torch torch
+ensure_pkg torchvision torchvision
+ensure_pkg numpy numpy
+ensure_pkg tqdm tqdm
+ensure_pkg sklearn scikit-learn
+ensure_pkg matplotlib matplotlib
+ensure_pkg tensorboard tensorboard
+ensure_pkg optuna optuna
+ensure_pkg torchinfo torchinfo
+ensure_pkg wandb wandb
+ensure_pkg decord decord
+ensure_pkg timm timm
 python -c "import cv2; print(f'  ✓ OpenCV {cv2.__version__}')" || echo "  ⚠ OpenCV not found (will fallback to decord)"
+python -c "import timm" 2>/dev/null || { echo "  ❌ timm still missing (required for Swin backbone)"; exit 1; }
 
-echo ""
-echo "Testing timm..."
-python -c "import timm; print(f'  ✓ timm {timm.__version__}')" || { echo "  ❌ timm not found — install with: pip install timm"; exit 1; }
-
-# W&B
+# W&B configuration
 export WANDB_API_KEY="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"
-export WANDB_PROJECT="localization-bugs"
+export WANDB_MODE="online"
+export WANDB_PROJECT="basic-intro"
 echo ""
 echo "  ✓ W&B project: $WANDB_PROJECT"
 echo "=============================================="
@@ -99,7 +128,7 @@ echo "=============================================="
 # Create output directories
 # ==============================================================================
 
-mkdir -p "$CHECKPOINT_DIR" "$LOGDIR/tensorboard" "$LOGDIR/../logs"
+mkdir -p "$CHECKPOINT_DIR" "$LOGDIR/tensorboard" /home/nahian26/scratch/logs
 
 # ==============================================================================
 # Auto-resume: detect latest epoch checkpoint
@@ -159,6 +188,7 @@ python "$SCRIPT_DIR/train.py" \
     --mode           train \
     --video-root     "$VIDEO_ROOT" \
     --temporal-dataset "$DATASET" \
+    --frame-cache-dir "$FRAME_CACHE_DIR" \
     --save-dir       "$CHECKPOINT_DIR" \
     --logdir         "$LOGDIR" \
     --hpo-trials     15 \
@@ -215,8 +245,8 @@ else
     echo ""
     echo "❌ Training failed (exit $EXIT_CODE)"
     echo "🔍 Logs:"
-    echo "   $LOGDIR/../logs/model3_pyramid_${SLURM_JOB_ID}.out"
-    echo "   $LOGDIR/../logs/model3_pyramid_${SLURM_JOB_ID}.err"
+    echo "   /home/nahian26/scratch/logs/model3_pyramid_${SLURM_JOB_ID}.out"
+    echo "   /home/nahian26/scratch/logs/model3_pyramid_${SLURM_JOB_ID}.err"
 fi
 
 echo ""

@@ -41,6 +41,9 @@ VIDEO_ROOT="/home/nahian26/scratch/videos"
 DATASET="/home/nahian26/scratch/localization/temporal_bug_dataset.json"
 CHECKPOINT_DIR="$SCRIPT_DIR/checkpoints"
 LOGDIR="$SCRIPT_DIR/logs"
+# Pre-extracted frame cache (shared by all 3 models; ~66 GB for 263 videos).
+# train.py builds any missing entries automatically on first run, then skips.
+FRAME_CACHE_DIR="/home/nahian26/scratch/frame_cache_fps8_224"
 
 echo ""
 echo "Paths:"
@@ -49,6 +52,7 @@ echo "  Video root  : $VIDEO_ROOT"
 echo "  Dataset     : $DATASET"
 echo "  Checkpoints : $CHECKPOINT_DIR"
 echo "  Logs        : $LOGDIR"
+echo "  Frame cache : $FRAME_CACHE_DIR"
 echo "=============================================="
 
 # ==============================================================================
@@ -73,7 +77,27 @@ else
 fi
 
 echo ""
-echo "Testing OpenCV..."
+echo "Checking Python packages (installing any missing ones)..."
+ensure_pkg () {
+    # $1 = import name, $2 = pip package name
+    if python -c "import $1" 2>/dev/null; then
+        echo "  ✓ $2"
+    else
+        echo "  ⚠ $2 missing — installing..."
+        pip install --no-index "$2" 2>/dev/null || pip install "$2" || \
+            echo "  ❌ Could not install $2 (continuing — a fallback may exist)"
+    fi
+}
+ensure_pkg torch torch
+ensure_pkg torchvision torchvision
+ensure_pkg numpy numpy
+ensure_pkg tqdm tqdm
+ensure_pkg sklearn scikit-learn
+ensure_pkg matplotlib matplotlib
+ensure_pkg tensorboard tensorboard
+ensure_pkg optuna optuna
+ensure_pkg torchinfo torchinfo
+ensure_pkg decord decord
 python -c "import cv2; print(f'  ✓ OpenCV {cv2.__version__}')" || echo "  ⚠ OpenCV not found (will fallback to decord)"
 echo "  ℹ W&B disabled on this server (narval/rorqual)"
 echo "  ℹ TensorBoard: ssh -L 6006:localhost:6006 nahian26@narval.computecanada.ca"
@@ -134,6 +158,7 @@ python "$SCRIPT_DIR/train.py" \
     --mode           train \
     --video-root     "$VIDEO_ROOT" \
     --temporal-dataset "$DATASET" \
+    --frame-cache-dir "$FRAME_CACHE_DIR" \
     --save-dir       "$CHECKPOINT_DIR" \
     --logdir         "$LOGDIR" \
     --hpo-trials     15 \
