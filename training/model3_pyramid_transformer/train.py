@@ -669,6 +669,8 @@ def collate_fn(batch):
     ct       = torch.zeros(len(batch), max_T, NUM_CLASSES)
     hg       = torch.zeros(len(batch), max_T, NUM_CLASSES)
     wl       = torch.stack([b["win_label"] for b in batch])
+    ws       = torch.tensor([float(b["win_start"]) for b in batch])
+    we       = torch.tensor([float(b["win_end"]) for b in batch])
     for i, b in enumerate(batch):
         T = b["frames"].shape[0]
         frames[i, :T] = b["frames"]
@@ -677,7 +679,8 @@ def collate_fn(batch):
         ct[i, :T]     = b["ctr_targets"]
         hg[i, :T]     = b["has_gt"]
     return dict(frames=frames, frame_labels=fl, reg_targets=rt,
-                ctr_targets=ct, has_gt=hg, win_label=wl)
+                ctr_targets=ct, has_gt=hg, win_label=wl,
+                win_start=ws, win_end=we)
 
 
 # ── multi-scale loss ──────────────────────────────────────────────────────────
