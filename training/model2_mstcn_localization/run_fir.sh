@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=40G
-#SBATCH --time=2-00:00:00
+#SBATCH --time=3-00:00:00
 #SBATCH --job-name=m2_mstcn_loc
 #SBATCH --output=/home/nahian26/scratch/logs/model2_mstcn_%j.out
 #SBATCH --error=/home/nahian26/scratch/logs/model2_mstcn_%j.err

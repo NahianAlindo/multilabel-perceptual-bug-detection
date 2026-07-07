@@ -337,11 +337,13 @@ class FrameSegDataset(Dataset):
     Videos are chunked to max_frames to fit in GPU memory.
     """
     def __init__(self, video_list, video_root, fps=8.0, img_size=224,
-                 max_frames=512, transform=None, frame_cache_dir=None):
+                 max_frames=512, transform=None, frame_cache_dir=None,
+                 min_chunk_frames=16):
         self.video_root = Path(video_root)
         self.fps = fps; self.img_size = img_size; self.max_frames = max_frames
         self.transform = transform or get_transform(img_size)
         self.frame_cache_dir = frame_cache_dir
+        self.min_chunk_frames = min_chunk_frames
         self.samples = []  # (video_path, annotations, chunk_start_frame, chunk_end_frame, cache_path)
         self._build_index(video_list)
 
@@ -362,6 +364,11 @@ class FrameSegDataset(Dataset):
             anns = vid.get("annotations", [])
             for start_f in range(0, max(1, total_frames), self.max_frames):
                 end_f = min(start_f + self.max_frames, total_frames)
+                # InstanceNorm1d needs >1 temporal element: a tiny trailing
+                # chunk (e.g. 1 frame when total % max_frames == 1) crashes the
+                # model, so extend it backwards to overlap the previous chunk.
+                if end_f - start_f < self.min_chunk_frames and start_f > 0:
+                    start_f = max(0, end_f - self.min_chunk_frames)
                 self.samples.append((str(vp), anns, start_f, end_f, cache_path))
         if self.frame_cache_dir:
             print(f"[dataset] frame cache: {n_cached}/{n_videos} videos "
@@ -385,14 +392,15 @@ class FrameSegDataset(Dataset):
                 frames_np, _ = extract_frames_at_fps(vp, self.fps, self.img_size)
                 chunk = frames_np[start_f:end_f]
             except Exception:
-                T = max(1, end_f - start_f)
+                T = max(2, end_f - start_f)
                 return (torch.zeros(T, self.img_size, self.img_size, 3, dtype=torch.uint8),
                         torch.zeros(T, NUM_CLASSES))
 
         T = len(chunk)
-        if T == 0:
-            chunk = np.zeros((1, self.img_size, self.img_size, 3), dtype=np.uint8)
-            T = 1
+        if T < 2:  # InstanceNorm needs >1 temporal element
+            pad = np.zeros((2 - T, self.img_size, self.img_size, 3), dtype=np.uint8)
+            chunk = np.concatenate([chunk, pad], axis=0) if T else pad
+            T = 2
         # uint8 [T,H,W,3] — normalized batched on GPU via normalize_frames_gpu()
         frames_t = torch.from_numpy(np.ascontiguousarray(chunk))
 
@@ -739,6 +747,10 @@ def run_test(model, args, device, thresholds, out_dir: Path, tb_writer=None, wan
         frame_probs = np.zeros((T, NUM_CLASSES), dtype=np.float32)
         for t0 in range(0, T, chunk):
             t1 = min(t0 + chunk, T)
+            if t1 - t0 < 2:  # InstanceNorm needs >1 temporal element
+                if t1 < 2:
+                    break
+                t0 = t1 - 2  # extend tiny tail chunk backwards
             chunk_u8 = torch.from_numpy(np.ascontiguousarray(frames_np[t0:t1])).unsqueeze(0)
             chunk_t = normalize_frames_gpu(chunk_u8, device)  # [1,t,3,H,W]
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
@@ -886,7 +898,8 @@ def run_train(args):
                                    img_size=args.img_size, frame_cache_dir=args.frame_cache_dir)
             ds_v = FrameSegDataset(val_vids[:10], args.video_root, fps=args.fps,
                                    img_size=args.img_size, frame_cache_dir=args.frame_cache_dir)
-            tl = DataLoader(ds_t, batch_size=int(hp["batch_size"]), shuffle=True, **loader_kwargs)
+            tl = DataLoader(ds_t, batch_size=int(hp["batch_size"]), shuffle=True,
+                            drop_last=True, **loader_kwargs)
             vl = DataLoader(ds_v, batch_size=int(hp["batch_size"]), shuffle=False, **loader_kwargs)
             es = MultiTaskEarlyStopping(patience=4)
             for ep in range(1, 9):
@@ -919,7 +932,7 @@ def run_train(args):
     val_ds = FrameSegDataset(val_vids, args.video_root, fps=args.fps, img_size=args.img_size,
                              frame_cache_dir=args.frame_cache_dir)
     train_loader = DataLoader(train_ds, batch_size=int(hparams["batch_size"]), shuffle=True,
-                              **loader_kwargs)
+                              drop_last=True, **loader_kwargs)
     val_loader = DataLoader(val_ds, batch_size=int(hparams["batch_size"]), shuffle=False,
                             **loader_kwargs)
 
@@ -1011,6 +1024,10 @@ def run_infer(args):
     chunk = 512
     for t0 in range(0, T, chunk):
         t1 = min(t0 + chunk, T)
+        if t1 - t0 < 2:  # InstanceNorm needs >1 temporal element
+            if t1 < 2:
+                break
+            t0 = t1 - 2  # extend tiny tail chunk backwards
         chunk_u8 = torch.from_numpy(np.ascontiguousarray(frames_np[t0:t1])).unsqueeze(0)
         chunk_t = normalize_frames_gpu(chunk_u8, device)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
