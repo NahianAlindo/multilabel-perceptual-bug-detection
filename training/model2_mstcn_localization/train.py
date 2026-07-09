@@ -827,7 +827,13 @@ def run_test(model, args, device, thresholds, out_dir: Path, tb_writer=None, wan
 
 def run_train(args):
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    if args.device.startswith("cuda") and device.type != "cuda":
+        sys.exit("[FATAL] --device cuda requested but torch.cuda.is_available() is False "
+                 "(GPU/driver problem on this node). Aborting instead of silently training "
+                 "on CPU for days. Resubmit; if it recurs on the same node, add "
+                 "#SBATCH --exclude=<node>.")
     if device.type == "cuda":
+        print(f"[train] GPU: {torch.cuda.get_device_name(0)} | torch CUDA {torch.version.cuda}")
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True

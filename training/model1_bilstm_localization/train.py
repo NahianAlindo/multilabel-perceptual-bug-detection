@@ -1292,6 +1292,13 @@ def hpo_objective(trial, args, device, train_loader, val_loader, use_amp=False):
 def run_train(args):
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     print(f"[train] Device: {device}")
+    if args.device.startswith("cuda") and device.type != "cuda":
+        sys.exit("[FATAL] --device cuda requested but torch.cuda.is_available() is False "
+                 "(GPU/driver problem on this node). Aborting instead of silently training "
+                 "on CPU for days. Resubmit; if it recurs on the same node, add "
+                 "#SBATCH --exclude=<node>.")
+    if device.type == "cuda":
+        print(f"[train] GPU: {torch.cuda.get_device_name(0)} | torch CUDA {torch.version.cuda}")
 
     # Speed knobs: fixed input sizes → cudnn autotune; TF32 for fp32 matmuls
     if device.type == "cuda":
