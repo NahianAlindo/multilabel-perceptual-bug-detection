@@ -103,6 +103,16 @@ ensure_pkg wandb wandb
 ensure_pkg decord decord
 python -c "import cv2; print(f'  ✓ OpenCV {cv2.__version__}')" || echo "  ⚠ OpenCV not found (will fallback to decord)"
 
+# Pin BLAS/OpenMP threads: BLIS aborts ("A different number of threads was
+# created than was requested") when it asks for more OpenMP threads than the
+# SLURM cgroup allows. 1 thread per process is correct here anyway — the GPU
+# does the math and the 8 DataLoader workers provide the CPU parallelism.
+export OMP_NUM_THREADS=1
+export BLIS_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+
 # W&B configuration
 export WANDB_API_KEY="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"
 export WANDB_MODE="online"
