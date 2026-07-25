@@ -192,13 +192,22 @@ def open_frame_cache(path: str):
 
 def extract_frames_at_fps(video_path: str, target_fps: float = 8.0,
                           img_size: int = 224) -> np.ndarray:
-    """Decode a full video once at target_fps, resized. Returns uint8 [T,H,W,3]."""
+    """Decode a full video once at target_fps, resized. Returns uint8 [T,H,W,3].
+
+    Samples by exact output timestamp (nearest native frame to k/target_fps for
+    each output slot k) rather than a fixed integer stride — a fixed stride only
+    lands on exactly target_fps when native_fps happens to divide evenly by it
+    (e.g. 30fps source with a stride-4 sample lands at 7.5fps actual, not 8).
+    """
     if DECORD_AVAILABLE:
         try:
             vr = VideoReader(video_path, ctx=cpu(0), width=img_size, height=img_size)
             native_fps = float(vr.get_avg_fps()) or 25.0
-            stride = max(1, round(native_fps / target_fps))
-            indices = list(range(0, len(vr), stride))
+            total_frames = len(vr)
+            duration = total_frames / native_fps
+            n_out = max(1, int(round(duration * target_fps)))
+            indices = np.clip(np.round(np.arange(n_out) / target_fps * native_fps).astype(int),
+                              0, total_frames - 1).tolist()
             batch = vr.get_batch(indices)
             frames = batch.asnumpy() if hasattr(batch, "asnumpy") else batch.numpy()
             return frames.astype(np.uint8)
@@ -207,16 +216,42 @@ def extract_frames_at_fps(video_path: str, target_fps: float = 8.0,
     if CV2_AVAILABLE:
         cap = cv2.VideoCapture(video_path)
         native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        stride = max(1, round(native_fps / target_fps))
-        frames_list, idx = [], 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if idx % stride == 0:
-                frame = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), (img_size, img_size))
-                frames_list.append(frame)
-            idx += 1
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = total_frames / native_fps if total_frames > 0 else 0.0
+        wanted = None
+        if duration > 0:
+            n_out = max(1, int(round(duration * target_fps)))
+            wanted = np.clip(np.round(np.arange(n_out) / target_fps * native_fps).astype(int),
+                             0, max(total_frames - 1, 0)).tolist()
+        frames_list = []
+        if wanted is not None:
+            wi, idx = 0, 0
+            while wi < len(wanted):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                resized = None
+                while wi < len(wanted) and wanted[wi] == idx:
+                    if resized is None:
+                        resized = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
+                                             (img_size, img_size))
+                    frames_list.append(resized)
+                    wi += 1
+                idx += 1
+        else:
+            # Total frame count unavailable (e.g. some streams) — fall back to
+            # fixed-stride sampling; downstream cache_fps correction still
+            # applies from the actual extracted length.
+            stride = max(1, round(native_fps / target_fps))
+            idx = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if idx % stride == 0:
+                    frame = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), (img_size, img_size))
+                    frames_list.append(frame)
+                idx += 1
         cap.release()
         if frames_list:
             return np.stack(frames_list).astype(np.uint8)
@@ -546,13 +581,26 @@ class TemporalWindowDataset(Dataset):
             if not os.path.exists(vp):
                 continue
             n_videos += 1
+            dur = vid.get("duration", 60.0)
             cache_path = None
+            # Cache fps: extract_frames_at_fps() picks stride=round(native_fps/target_fps),
+            # so the cache's REAL fps (n_frames/duration) only equals the nominal target_fps
+            # when native_fps happens to divide evenly by it (e.g. 30fps -> stride 4 -> 7.5
+            # fps actual, not 8). Compute the true per-video fps from the cache itself so
+            # __getitem__ indexes the right frames instead of silently drifting later in
+            # the video.
+            cache_fps = self.fps
             if self.frame_cache_dir:
                 cp = os.path.join(self.frame_cache_dir, frame_cache_name(vid["video_path"]))
                 if os.path.exists(cp):
                     cache_path = cp
                     n_cached += 1
-            dur = vid.get("duration", 60.0)
+                    try:
+                        cached_arr = open_frame_cache(cp)
+                        if dur > 0 and cached_arr.shape[0] > 0:
+                            cache_fps = cached_arr.shape[0] / dur
+                    except Exception:
+                        cache_fps = self.fps
             anns = vid.get("annotations", [])
 
             t = 0.0
@@ -606,6 +654,7 @@ class TemporalWindowDataset(Dataset):
                 self.windows.append({
                     "video_path":   vp,
                     "cache_path":   cache_path,
+                    "cache_fps":    cache_fps,
                     "win_start":    win_s,
                     "win_end":      win_e,
                     "n_frames":     n_frames,
@@ -630,7 +679,10 @@ class TemporalWindowDataset(Dataset):
             # Fast path: memmap slice from the pre-extracted frame cache
             try:
                 arr = open_frame_cache(w["cache_path"])
-                f_start = int(w["win_start"] * self.fps)
+                # Index using the cache's actual fps (see _build_windows), not the
+                # nominal self.fps — they only agree when native_fps divides evenly
+                # by the target fps.
+                f_start = int(w["win_start"] * w.get("cache_fps", self.fps))
                 sl = np.asarray(arr[f_start: f_start + w["n_frames"]])
                 frames = torch.from_numpy(np.ascontiguousarray(sl)) \
                               .permute(0, 3, 1, 2).float().div_(255.0)
@@ -976,7 +1028,9 @@ def train_one_epoch(model, loader, optimizer, scaler, asl_fn,
 
 @torch.no_grad()
 def evaluate(model, loader, device, fps: float, window_sec: float,
-             thresholds: Optional[np.ndarray] = None):
+             thresholds: Optional[np.ndarray] = None,
+             min_conf: float = 0.1, min_duration: float = 0.5,
+             nms_sigma: float = 0.5, nms_score_thr: float = 0.05):
     model.eval()
     all_probs, all_labels = [], []
     pred_by_class: Dict[str, List] = {c: [] for c in CANON_BUG_TYPES}
@@ -1001,9 +1055,9 @@ def evaluate(model, loader, device, fps: float, window_sec: float,
             single_out = [(c[bi:bi+1], r[bi:bi+1], ct[bi:bi+1])
                           for c, r, ct in outputs]
             dets = decode_predictions(single_out, win_s, fps,
-                                      min_conf=0.1, min_duration=0.5,
+                                      min_conf=min_conf, min_duration=min_duration,
                                       thresholds=thresholds)
-            dets = soft_nms_temporal(dets)
+            dets = soft_nms_temporal(dets, sigma=nms_sigma, score_thr=nms_score_thr)
             for d in dets:
                 pred_by_class[d["bug_type"]].append(d)
 
@@ -1298,6 +1352,16 @@ def run_train(args):
     batch_size   = int(best_hparams.get("batch_size",  args.batch_size))
     stride_sec   = float(best_hparams.get("stride_sec", args.stride_sec))
 
+    # Explicit CLI overrides win regardless of whether HPO ran or the
+    # hardcoded default was used — lets a fine-tune push loss weighting
+    # manually without re-running HPO.
+    if args.lambda_cls is not None:
+        lambda_cls = args.lambda_cls
+    if args.lambda_reg is not None:
+        lambda_reg = args.lambda_reg
+    if args.lr is not None:
+        lr = args.lr
+
     model = PyramidTransformerLocalization(
         backbone_name=args.backbone,
         dropout=dropout
@@ -1321,6 +1385,10 @@ def run_train(args):
         model.load_state_dict(ckpt["model_state"], strict=False)
         start_epoch = ckpt.get("epoch", 0) + 1
         print(f"[INFO] Resumed from {args.checkpoint} (epoch {start_epoch})")
+        if start_epoch >= args.epochs:
+            sys.exit(f"[FATAL] Resumed epoch ({start_epoch}) >= --epochs ({args.epochs}) — "
+                     f"the training loop would run zero epochs and silently write an empty "
+                     f"test_metrics.json. Raise --epochs well above {start_epoch} and resubmit.")
 
     train_ds = TemporalWindowDataset(train_vids, args.video_root, fps=args.fps,
                                      img_size=args.img_size, window_sec=args.window_sec,
@@ -1358,7 +1426,11 @@ def run_train(args):
         train_loss = train_one_epoch(model, train_loader, optimizer, scaler,
                                      asl_fn, lambda_cls, lambda_reg, device)
         cls_m, temp_m, thresholds = evaluate(model, val_loader, device,
-                                              args.fps, args.window_sec)
+                                              args.fps, args.window_sec,
+                                              min_conf=args.min_conf,
+                                              min_duration=args.min_duration,
+                                              nms_sigma=args.nms_sigma,
+                                              nms_score_thr=args.nms_score_thr)
 
         f1   = cls_m.get("f1_micro", 0.0)
         map5 = temp_m.get("mAP@0.5", 0.0)
@@ -1436,7 +1508,11 @@ def run_train(args):
         model.load_state_dict(ckpt["model_state"])
         thr  = np.array(ckpt.get("thresholds", [0.5] * NUM_CLASSES))
         cls_m, temp_m, _ = evaluate(model, test_loader, device,
-                                     args.fps, args.window_sec, thr)
+                                     args.fps, args.window_sec, thr,
+                                     min_conf=args.min_conf,
+                                     min_duration=args.min_duration,
+                                     nms_sigma=args.nms_sigma,
+                                     nms_score_thr=args.nms_score_thr)
         all_test_results[ckpt_name] = {**cls_m, **temp_m}
         print(f"\n  [{ckpt_name}] F1={cls_m.get('f1_micro',0):.3f} | "
               f"mAP@0.3={temp_m.get('mAP@0.3',0):.3f} | "
@@ -1533,10 +1609,68 @@ def run_infer(args):
         print(json.dumps(result, indent=2))
 
 
+# ── eval-only mode ─────────────────────────────────────────────────────────────
+def run_eval(args):
+    """
+    Re-score an existing checkpoint against a val/test split without
+    retraining — lets post-processing params (min-conf/min-duration/nms-*)
+    be swept cheaply.
+    """
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    if not args.checkpoint:
+        print("ERROR: --checkpoint required for eval mode")
+        sys.exit(1)
+
+    with open(args.temporal_dataset) as f:
+        dataset = json.load(f)
+    splits   = dataset.get("metadata", {}).get("splits", dataset.get("splits", {}))
+    all_vids = {v["video_id"]: v for v in dataset.get("videos", [])}
+    split_ids  = splits.get(args.eval_split, [])
+    split_vids = [all_vids[i] for i in split_ids if i in all_vids]
+    print(f"[INFO] Eval split '{args.eval_split}': {len(split_vids)} videos")
+
+    eval_ds = TemporalWindowDataset(split_vids, args.video_root, fps=args.fps,
+                                    img_size=args.img_size, window_sec=args.window_sec,
+                                    stride_sec=args.stride_sec, split=args.eval_split,
+                                    frame_cache_dir=args.frame_cache_dir)
+    eval_loader = DataLoader(eval_ds, batch_size=args.batch_size, shuffle=False,
+                             num_workers=args.num_workers, collate_fn=collate_fn,
+                             pin_memory=True, persistent_workers=args.num_workers > 0)
+
+    ckpt  = torch.load(args.checkpoint, map_location=device)
+    model = PyramidTransformerLocalization(backbone_name=args.backbone).to(device)
+    model.load_state_dict(ckpt["model_state"], strict=False)
+    thr = np.array(ckpt.get("thresholds", [0.5] * NUM_CLASSES))
+
+    cls_m, temp_m, _ = evaluate(model, eval_loader, device, args.fps, args.window_sec, thr,
+                                min_conf=args.min_conf, min_duration=args.min_duration,
+                                nms_sigma=args.nms_sigma, nms_score_thr=args.nms_score_thr)
+
+    print(f"\n[EVAL] split={args.eval_split} checkpoint={args.checkpoint}")
+    print(f"  min_conf={args.min_conf} min_duration={args.min_duration} "
+          f"nms_sigma={args.nms_sigma} nms_score_thr={args.nms_score_thr}")
+    print(f"  F1_micro={cls_m.get('f1_micro',0):.4f} | "
+          f"mAP@0.3={temp_m.get('mAP@0.3',0):.4f} | mAP@0.5={temp_m.get('mAP@0.5',0):.4f} | "
+          f"f1@0.5={temp_m.get('f1@0.5',0):.4f} | "
+          f"over_pred_ratio={temp_m.get('segment_over_pred_ratio',0):.3f}")
+
+    result = {**cls_m, **temp_m, "_params": {
+        "checkpoint": args.checkpoint, "eval_split": args.eval_split,
+        "min_conf": args.min_conf, "min_duration": args.min_duration,
+        "nms_sigma": args.nms_sigma, "nms_score_thr": args.nms_score_thr,
+    }}
+    os.makedirs(args.logdir, exist_ok=True)
+    tag = f"_{args.eval_tag}" if args.eval_tag else ""
+    out_path = os.path.join(args.logdir, f"eval_{args.eval_split}{tag}.json")
+    with open(out_path, "w") as f:
+        json.dump(result, f, indent=2)
+    print(f"[INFO] Eval metrics saved to {out_path}")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 def parse_args():
     p = argparse.ArgumentParser(description="Model 3: Feature Pyramid + Transformer")
-    p.add_argument("--mode",             choices=["train", "infer"], default="train")
+    p.add_argument("--mode",             choices=["train", "infer", "eval"], default="train")
     # data
     p.add_argument("--video-root",       default="")
     p.add_argument("--temporal-dataset", default="")
@@ -1555,17 +1689,36 @@ def parse_args():
     p.add_argument("--hpo-trials",       type=int,   default=0)
     p.add_argument("--pilot",            action="store_true")
     p.add_argument("--checkpoint",       default="")
+    # loss weighting — None means "use HPO result / hardcoded default";
+    # an explicit value overrides both, for a manual precision-focused fine-tune
+    p.add_argument("--lambda-cls",       type=float, default=None)
+    p.add_argument("--lambda-reg",       type=float, default=None)
+    p.add_argument("--lr",               type=float, default=None,
+                   help="Override the resolved LR (HPO result or hardcoded default). "
+                        "Resumed checkpoints have no optimizer state, so AdamW restarts "
+                        "from scratch — use a smaller value than the original run for a "
+                        "fine-tune to avoid jolting an already-converged model.")
     # model
     p.add_argument("--backbone",         default="swin_small_patch4_window7_224")
     p.add_argument("--window-sec",       type=float, default=4.0)
     p.add_argument("--stride-sec",       type=float, default=1.0)
     p.add_argument("--fps",              type=float, default=8.0)
     p.add_argument("--img-size",         type=int,   default=224)
+    # post-processing (decode_predictions / soft_nms_temporal) — tunable so
+    # over-prediction can be swept without retraining
+    p.add_argument("--min-conf",         type=float, default=0.1)
+    p.add_argument("--min-duration",     type=float, default=0.5)
+    p.add_argument("--nms-sigma",        type=float, default=0.5)
+    p.add_argument("--nms-score-thr",    type=float, default=0.05)
     # logging
     p.add_argument("--wandb-project",    default="")
     p.add_argument("--no-wandb",         action="store_true")
     # infer
     p.add_argument("--inference-out",    default="")
+    # eval-only mode
+    p.add_argument("--eval-split",       choices=["val", "test"], default="test")
+    p.add_argument("--eval-tag",         default="",
+                   help="Suffix for the output filename, useful when sweeping params.")
     return p.parse_args()
 
 
@@ -1573,6 +1726,8 @@ if __name__ == "__main__":
     args = parse_args()
     if args.mode == "train":
         run_train(args)
+    elif args.mode == "eval":
+        run_eval(args)
     else:
         if not args.checkpoint:
             print("ERROR: --checkpoint required for infer mode")
