@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --time=02:00:00
+#SBATCH --time=03:00:00
 #SBATCH --job-name=m3_pilot_clean
 #SBATCH --output=/home/nahian26/scratch/logs/model3_pilot_%j.out
 #SBATCH --error=/home/nahian26/scratch/logs/model3_pilot_%j.err

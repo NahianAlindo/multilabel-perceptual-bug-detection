@@ -22,6 +22,15 @@ from functools import lru_cache
 from multiprocessing import Pool
 
 import numpy as np
+# Compatibility shim: NumPy 2.0 removed the deprecated np.Inf/np.NaN aliases
+# (use np.inf/np.nan). Some installed library versions (e.g. this cluster's
+# matplotlib, inside axes/_base.py's title-position logic) still reference
+# the old names internally — restore them so those libraries keep working
+# without pinning numpy<2 or upgrading matplotlib on the cluster.
+if not hasattr(np, "Inf"):
+    np.Inf = np.inf
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -325,6 +334,16 @@ class AsymmetricLoss(nn.Module):
         self.clip = clip
 
     def forward(self, logits, targets):
+        # Force fp32 regardless of the caller's autocast dtype: 1e-8 isn't
+        # representable in fp16 (rounds to exactly 0.0), which makes the
+        # clamp() below a no-op and lets sigmoid(logits) underflow to a true
+        # 0.0 once logits < ~-17.3 — log(0.0) = -inf, then targets * -inf
+        # (targets==0 is the common case) = NaN. This is a real failure mode
+        # a converging detector will eventually hit, not just a fp16 edge
+        # case, so it's fixed here permanently rather than by relying on the
+        # caller using bf16.
+        logits = logits.float()
+        targets = targets.float()
         xs_pos = torch.sigmoid(logits)
         xs_neg = 1 - xs_pos
         if self.clip > 0:
@@ -1009,21 +1028,52 @@ def train_one_epoch(model, loader, optimizer, scaler, asl_fn,
                     lambda_cls, lambda_reg, device) -> float:
     model.train()
     total_loss = 0.0
+    n_valid = 0
+    n_skipped = 0
     for batch in loader:
         frames = batch["frames"].to(device)
         batch_dev = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
         optimizer.zero_grad()
-        with torch.cuda.amp.autocast():
+        # bf16 (fp32 exponent range) instead of fp16 to reduce the odds of
+        # underflow/overflow generally, but the actual NaN source that hit
+        # this codebase was AsymmetricLoss.forward's `clamp(min=1e-8)`: 1e-8
+        # isn't representable in fp16 (rounds to exactly 0.0), so under fp16
+        # the clamp was a no-op — sigmoid(logits) could underflow to a true
+        # 0.0 for confident-negative logits, and log(0.0) = -inf propagated
+        # to NaN. AsymmetricLoss now forces fp32 internally regardless of
+        # this autocast's dtype, which is the real fix; bf16 here is
+        # defense-in-depth for anything else in the forward pass. GradScaler
+        # is a fp16-only mechanism (works around fp16 gradient underflow) so
+        # it's disabled below — a no-op passthrough under bf16. Because that
+        # also removes GradScaler's own inf/NaN gradient gate (it used to
+        # skip optimizer.step() automatically when unscale_() found a
+        # non-finite gradient), the isfinite checks below on both the loss
+        # AND the post-clip gradient norm replace it explicitly.
+        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
             outputs = model(frames)
             loss    = compute_loss(outputs, batch_dev, asl_fn, lambda_cls, lambda_reg)
+        if not torch.isfinite(loss):
+            n_skipped += 1
+            continue
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        if not torch.isfinite(grad_norm):
+            n_skipped += 1
+            optimizer.zero_grad(set_to_none=True)
+            continue
         scaler.step(optimizer)
         scaler.update()
         total_loss += loss.item()
-    return total_loss / max(len(loader), 1)
+        n_valid += 1
+    if n_skipped:
+        print(f"[WARN] train_one_epoch: skipped {n_skipped} batch(es) with "
+              f"non-finite loss or gradient norm (NaN/Inf) — not applied to the model.")
+    if n_valid == 0:
+        print("[WARN] train_one_epoch: every batch this epoch was skipped — "
+              "the printed loss below is a placeholder (0.0), not a real value.")
+    return total_loss / max(n_valid, 1)
 
 
 @torch.no_grad()
@@ -1188,7 +1238,7 @@ def hpo_objective(trial, args, train_vids, val_vids, device):
 
     asl_fn    = AsymmetricLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scaler    = torch.cuda.amp.GradScaler()
+    scaler    = torch.cuda.amp.GradScaler(enabled=False)  # bf16 doesn't need loss scaling
     es        = MultiTaskEarlyStopping(patience=15)
 
     n_pilot_epochs = 5
@@ -1286,7 +1336,7 @@ def run_train(args):
                                   persistent_workers=args.num_workers > 0)
         asl_fn    = AsymmetricLoss()
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
-        scaler    = torch.cuda.amp.GradScaler()
+        scaler    = torch.cuda.amp.GradScaler(enabled=False)  # bf16 doesn't need loss scaling
         for epoch in range(5):
             tl = train_one_epoch(model, train_loader, optimizer, scaler, asl_fn, 1.0, 1.0, device)
             cls_m, temp_m, _ = evaluate(model, val_loader, device, args.fps, args.window_sec)
@@ -1412,7 +1462,7 @@ def run_train(args):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="max", patience=5, factor=0.5, min_lr=1e-6, verbose=True
     )
-    scaler    = torch.cuda.amp.GradScaler()
+    scaler    = torch.cuda.amp.GradScaler(enabled=False)  # bf16 doesn't need loss scaling
     es        = MultiTaskEarlyStopping(patience=15, lr_floor=1e-6)
 
     best_scores = {"composite": -1e9, "f1": -1e9, "mAP": -1e9}
