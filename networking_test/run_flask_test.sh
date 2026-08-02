@@ -8,7 +8,8 @@
 #SBATCH --job-name=flask_reach_test
 #SBATCH --output=/home/nahian26/scratch/logs/flask_reach_test_%j.out
 #SBATCH --error=/home/nahian26/scratch/logs/flask_reach_test_%j.err
-
+#SBATCH --mail-user=nahian.rifaat@ontariotechu.net
+#SBATCH --mail-type=BEGIN,END,FAIL,TIME_LIMIT_80
 # ==============================================================================
 # Networking feasibility test — NOT a real inference server.
 # Server: nibi (or fir)
