@@ -1756,10 +1756,10 @@ def parse_args():
     p.add_argument("--img-size",         type=int,   default=224)
     # post-processing (decode_predictions / soft_nms_temporal) — tunable so
     # over-prediction can be swept without retraining
-    p.add_argument("--min-conf",         type=float, default=0.1)
+    p.add_argument("--min-conf",         type=float, default=0.3)
     p.add_argument("--min-duration",     type=float, default=0.5)
     p.add_argument("--nms-sigma",        type=float, default=0.5)
-    p.add_argument("--nms-score-thr",    type=float, default=0.05)
+    p.add_argument("--nms-score-thr",    type=float, default=0.25)
     # logging
     p.add_argument("--wandb-project",    default="")
     p.add_argument("--no-wandb",         action="store_true")
