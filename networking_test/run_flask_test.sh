@@ -4,7 +4,7 @@
 #SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
-#SBATCH --time=00:15:00
+#SBATCH --time=01:15:00
 #SBATCH --job-name=flask_reach_test
 #SBATCH --output=/home/nahian26/scratch/logs/flask_reach_test_%j.out
 #SBATCH --error=/home/nahian26/scratch/logs/flask_reach_test_%j.err
