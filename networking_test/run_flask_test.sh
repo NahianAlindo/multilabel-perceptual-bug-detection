@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --account=def-loutfouz_gpu
 #SBATCH --partition=gpubase_bygpu_b4
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:h100:1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --time=00:15:00
@@ -37,6 +37,22 @@ echo "=============================================="
 REPO_DIR="/home/nahian26/scratch/multilabel-perceptual-bug-detection"
 SCRIPT_DIR="$REPO_DIR/networking_test"
 
+# ==============================================================================
+# ⚠️  REAL SECRET — DO NOT COMMIT THIS LINE ONCE FILLED IN.
+# This is a throwaway networking test, so the token is hardcoded here for
+# convenience rather than passed via `sbatch --export`. Fill in the value
+# below on nibi directly (e.g. `nano run_flask_test.sh`), but do NOT
+# `git add`/commit/push that change — if it ever lands in git history it's
+# recoverable forever, even after deleting it in a later commit. If you do
+# accidentally commit it, rotate the token at dashboard.ngrok.com/authtokens
+# immediately (delete the old one, generate a new one) rather than relying
+# on removing it from history.
+# `${NGROK_AUTH_TOKEN:-...}` means an explicit `--export=ALL,NGROK_AUTH_TOKEN`
+# at submit time still overrides this default if you ever want to use a
+# different token for one run without editing the file.
+# ==============================================================================
+export NGROK_AUTH_TOKEN="${NGROK_AUTH_TOKEN:-28PZDZRjDwUMiT2IElZaUYHD4gX_7Mt4UioEBv2LHQtqqU1t8}"
+
 echo ""
 echo "Loading modules..."
 module load python/3.10
@@ -57,6 +73,28 @@ python -c "import flask; print(f'  ✓ Flask {flask.__version__}')" 2>/dev/null 
     echo "  ⚠ Flask missing — installing..."
     pip install --no-index flask 2>/dev/null || pip install flask
 }
+
+if [ "$NGROK_AUTH_TOKEN" = "PASTE_YOUR_NGROK_TOKEN_HERE" ]; then
+    echo ""
+    echo "  ⚠ NGROK_AUTH_TOKEN still has its placeholder value — edit this script"
+    echo "    on nibi and paste your real token in, or pass one at submit time:"
+    echo "    sbatch --export=ALL,NGROK_AUTH_TOKEN=<token> run_flask_test.sh"
+    echo "    Continuing with direct-reachability test only, no tunnel."
+    NGROK_AUTH_TOKEN=""
+fi
+
+if [ -n "$NGROK_AUTH_TOKEN" ]; then
+    echo ""
+    echo "Checking pyngrok (installing if missing)..."
+    python -c "import pyngrok; print('  ✓ pyngrok present')" 2>/dev/null || {
+        echo "  ⚠ pyngrok missing — installing..."
+        pip install --no-index pyngrok 2>/dev/null || pip install pyngrok
+    }
+else
+    echo ""
+    echo "  ℹ NGROK_AUTH_TOKEN not set — direct-reachability test only, no tunnel."
+    echo "    (resubmit with: sbatch --export=ALL,NGROK_AUTH_TOKEN=<token> run_flask_test.sh)"
+fi
 
 export OMP_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
@@ -87,6 +125,11 @@ echo ""
 echo "  From your own machine (see the chat response for the full explanation):"
 echo "    ssh -L 5000:$SLURMD_NODENAME:5000 nahian26@nibi.alliancecan.ca"
 echo "    curl http://localhost:5000/health"
+if [ -n "$NGROK_AUTH_TOKEN" ]; then
+    echo ""
+    echo "  ngrok tunnel requested — its public URL prints below once the"
+    echo "  Flask process below opens it (look for a line starting [NGROK])."
+fi
 echo "=============================================="
 echo ""
 
