@@ -181,7 +181,15 @@
   </div>
 
   <div id="file-info" class="mt-4 text-sm text-slate-400 hidden"></div>
+  <div id="file-meta" class="mt-1 text-xs text-slate-500 hidden"></div>
   <div id="upload-error" class="mt-3 text-sm text-red-400 hidden"></div>
+
+  <div id="upload-progress-wrap" class="w-full max-w-xl mt-4 hidden">
+    <div class="bg-slate-800 rounded-full h-2 overflow-hidden">
+      <div id="upload-progress-fill" class="h-full rounded-full bg-indigo-500" style="width: 0%"></div>
+    </div>
+    <p id="upload-progress-pct" class="mt-1 text-slate-500 text-xs text-right">0%</p>
+  </div>
 
   <button
     id="upload-btn"
@@ -286,6 +294,14 @@
 const LOCAL_API    = 'http://localhost:8000';
 const MAX_DURATION = 20 * 60;
 const POLL_INTERVAL = 3000;
+// Videos here run several hundred MB to low GB (5-15+ minute gameplay
+// captures) — uploaded in fixed-size pieces instead of one request so a
+// dropped connection over ngrok only costs the in-flight chunk, not the
+// whole file. The server resamples every video to 8fps/224x224 on its own
+// regardless of the source resolution/fps, so this is purely about
+// transfer reliability, not correctness.
+const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB
+const CHUNK_MAX_RETRIES = 3;
 
 function getAPI()          { return localStorage.getItem('kaggle_ngrok_url') || LOCAL_API; }
 function isKaggleMode()    { return !!localStorage.getItem('kaggle_ngrok_url'); }
@@ -378,7 +394,13 @@ function handleFileSelected(file) {
   fileInfo.textContent = `${file.name}  (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
   fileInfo.classList.remove('hidden');
 
-  // Check duration via a temporary <video> element
+  // Check duration + resolution via a temporary <video> element. This is
+  // informational only (advisory text below) — it does NOT resize/transcode
+  // the file. The server resamples to 8fps/224x224 during its own decode
+  // step regardless of what's uploaded, so there's no correctness reason to
+  // pre-resize client-side, only a (much heavier) bandwidth one — not worth
+  // the added complexity/dependency weight for this project.
+  const fileMeta = document.getElementById('file-meta');
   const tmpVideo = document.createElement('video');
   tmpVideo.preload = 'metadata';
   tmpVideo.onloadedmetadata = () => {
@@ -386,8 +408,15 @@ function handleFileSelected(file) {
     if (tmpVideo.duration > MAX_DURATION) {
       showUploadError(`Video is ${fmtTime(tmpVideo.duration)} — maximum allowed is 20:00.`);
       uploadBtn.classList.add('hidden');
+      fileMeta.classList.add('hidden');
       selectedFile = null;
     } else {
+      const nChunks = Math.ceil(file.size / CHUNK_SIZE);
+      fileMeta.textContent =
+        `${tmpVideo.videoWidth}×${tmpVideo.videoHeight} · ${fmtTime(tmpVideo.duration)} · ` +
+        `uploads in ${nChunks} chunk${nChunks === 1 ? '' : 's'} · ` +
+        `server resamples to 224×224 @ 8fps for inference`;
+      fileMeta.classList.remove('hidden');
       uploadBtn.classList.remove('hidden');
     }
   };
@@ -399,23 +428,86 @@ function showUploadError(msg) {
   uploadErr.classList.remove('hidden');
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Chunked upload — see CHUNK_SIZE comment above for why. Sequential,
+// not parallel: keeps memory/bandwidth bounded and matches the server's
+// append-in-order assumption (nibi_inference_server.py's chunk endpoint
+// doesn't handle out-of-order chunks).
+// ─────────────────────────────────────────────────────────────────
+const uploadProgressWrap = document.getElementById('upload-progress-wrap');
+const uploadProgressFill = document.getElementById('upload-progress-fill');
+const uploadProgressPct  = document.getElementById('upload-progress-pct');
+
+function updateUploadProgress(done, total) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  uploadProgressFill.style.width = `${pct}%`;
+  uploadProgressPct.textContent = `${pct}%  (${done}/${total} chunks)`;
+}
+
+async function uploadChunkWithRetry(uploadId, index, chunk) {
+  let lastErr;
+  for (let attempt = 1; attempt <= CHUNK_MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(apiUrl(`/api/upload/chunk/${uploadId}/${index}`), {
+        method: 'POST',
+        body: chunk,
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return; // success
+    } catch (err) {
+      lastErr = err;
+      if (attempt < CHUNK_MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, 1000 * attempt)); // simple backoff
+      }
+    }
+  }
+  throw new Error(`Chunk ${index} failed after ${CHUNK_MAX_RETRIES} attempts: ${lastErr.message}`);
+}
+
+async function uploadFileChunked(file) {
+  const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+
+  const initRes = await fetch(apiUrl('/api/upload/init'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filename: file.name,
+      total_size: file.size,
+      total_chunks: totalChunks,
+    }),
+  });
+  if (!initRes.ok) throw new Error(await initRes.text());
+  const { upload_id } = await initRes.json();
+
+  updateUploadProgress(0, totalChunks);
+  for (let i = 0; i < totalChunks; i++) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, file.size);
+    await uploadChunkWithRetry(upload_id, i, file.slice(start, end));
+    updateUploadProgress(i + 1, totalChunks);
+  }
+
+  const completeRes = await fetch(apiUrl(`/api/upload/complete/${upload_id}`), { method: 'POST' });
+  if (!completeRes.ok) throw new Error(await completeRes.text());
+  const { job_id } = await completeRes.json();
+  return job_id;
+}
+
 uploadBtn.addEventListener('click', async () => {
   if (!selectedFile) return;
   uploadBtn.disabled = true;
   uploadBtn.textContent = 'Uploading…';
-
-  const form = new FormData();
-  form.append('file', selectedFile);
+  uploadProgressWrap.classList.remove('hidden');
 
   try {
-    const res = await fetch(apiUrl('/api/upload'), { method: 'POST', body: form });
-    if (!res.ok) throw new Error(await res.text());
-    const { job_id } = await res.json();
+    const job_id = await uploadFileChunked(selectedFile);
     state.jobId = job_id;
+    uploadProgressWrap.classList.add('hidden');
     showPage('processing');
     startPolling();
   } catch (err) {
     showUploadError(`Upload failed: ${err.message}`);
+    uploadProgressWrap.classList.add('hidden');
     uploadBtn.disabled = false;
     uploadBtn.textContent = 'Analyze Video';
   }

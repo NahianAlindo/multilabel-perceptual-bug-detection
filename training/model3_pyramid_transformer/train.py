@@ -1615,6 +1615,8 @@ def run_infer(args):
 
     all_dets: List[Dict] = []
     t = 0.0
+    n_windows = max(1, int(dur // args.stride_sec) + 1)
+    win_idx = 0
     while t + args.window_sec <= dur + 1e-3:
         win_s = t
         win_e = min(t + args.window_sec, dur)
@@ -1624,12 +1626,15 @@ def run_infer(args):
         with torch.no_grad():
             outputs = model(frames)
         dets = decode_predictions(outputs, win_s, args.fps,
-                                  min_conf=0.2, min_duration=0.5,
+                                  min_conf=args.min_conf, min_duration=args.min_duration,
                                   thresholds=thresholds)
         all_dets.extend(dets)
         t += args.stride_sec
+        win_idx += 1
+        if win_idx % 20 == 0 or win_idx == n_windows:
+            print(f"[INFER] window {win_idx}/{n_windows} ({win_s:.1f}s / {dur:.1f}s)", flush=True)
 
-    all_dets = soft_nms_temporal(all_dets)
+    all_dets = soft_nms_temporal(all_dets, sigma=args.nms_sigma, score_thr=args.nms_score_thr)
 
     # Format output (backend-compatible)
     annotations = []
