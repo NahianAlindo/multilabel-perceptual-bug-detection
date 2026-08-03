@@ -958,8 +958,14 @@ def decode_predictions(outputs, win_start: float, fps: float,
                 if cls_conf >= thresholds[ci] and cls_conf * conf >= min_conf:
                     all_detections.append({
                         "bug_type": cls,
-                        "start":    pred_s,
-                        "end":      pred_e,
+                        # pred_s/pred_e come from a numpy array (reg_vals),
+                        # so they're numpy.float32 unless explicitly cast —
+                        # json.dump() can't serialize that type, and this
+                        # dict eventually gets written straight to
+                        # result.json by run_infer(). float() everything
+                        # going into this dict, not just score.
+                        "start":    float(pred_s),
+                        "end":      float(pred_e),
                         "score":    float(cls_conf * conf),
                     })
 

@@ -37,7 +37,7 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -121,11 +121,19 @@ def _run_inference_worker(job_id: str, video_path: str):
         # Stream progress from subprocess stdout. train.py's run_infer now
         # prints "[INFER] window N/M (...)" every 20 windows, so this
         # actually tracks real progress instead of a fake incrementing bar.
+        # Also re-print every line to OUR OWN stdout (lands in the SLURM
+        # .out log, given PYTHONUNBUFFERED=1) and keep the last few lines
+        # around — if the subprocess fails, its actual traceback is almost
+        # always in those last lines, not in a generic exit-code message.
         progress = 10
+        tail_lines: List[str] = []
         for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue
+            print(f"[infer:{job_id[:8]}] {line}")
+            tail_lines.append(line)
+            tail_lines = tail_lines[-15:]
             if progress < 90:
                 progress = min(90, progress + 2)
             _write_status(job_dir, "processing", progress, line[:120])
@@ -133,7 +141,9 @@ def _run_inference_worker(job_id: str, video_path: str):
         proc.wait()
 
         if proc.returncode != 0:
-            _write_status(job_dir, "error", 0, f"Inference process exited with code {proc.returncode}")
+            detail = " | ".join(tail_lines[-5:]) or "(no output captured)"
+            _write_status(job_dir, "error", 0,
+                         f"Inference process exited with code {proc.returncode}: {detail}"[:500])
             return
 
         if not (job_dir / "result.json").exists():

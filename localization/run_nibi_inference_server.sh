@@ -108,6 +108,13 @@ if [ "$NGROK_AUTH_TOKEN" = "PASTE_YOUR_NGROK_TOKEN_HERE" ]; then
     exit 1
 fi
 
+# Without this, Python fully-buffers stdout when it's not a TTY (i.e.
+# whenever SLURM redirects it to a log file) — print() output, including
+# the ngrok tunnel URL, can sit invisible in the buffer for a long time
+# instead of showing up in `tail -f` right away, even though the server is
+# actually running fine underneath.
+export PYTHONUNBUFFERED=1
+
 export OMP_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
