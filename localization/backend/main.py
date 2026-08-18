@@ -9,9 +9,15 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from inference import JOBS_DIR, run_inference
+
+try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
 
 app = FastAPI(title="Bug Detection API")
 
@@ -44,6 +50,32 @@ async def upload_video(file: UploadFile = File(...)) -> JSONResponse:
     with open(video_path, "wb") as f:
         while chunk := await file.read(1024 * 1024):  # 1 MB chunks
             f.write(chunk)
+
+    # Read-only duration probe on a separate handle, closed before inference
+    # ever starts — enforces the limit the UI already advertises but this
+    # endpoint previously never checked server-side.
+    if CV2_AVAILABLE:
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            cap.release()
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "status.json").write_text(json.dumps({
+                "status": "error", "progress": 0,
+                "message": "This file could not be opened by the server's video "
+                           "decoder (likely an unsupported codec or container).",
+            }))
+            return JSONResponse({"job_id": job_id})
+        fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0
+        cap.release()
+        duration = (frame_count / fps) if fps > 0 and frame_count > 0 else 0.0
+        if duration > MAX_DURATION_SECONDS:
+            (job_dir / "status.json").write_text(json.dumps({
+                "status": "error", "progress": 0,
+                "message": f"Video is {duration:.0f}s long — maximum allowed is "
+                           f"{MAX_DURATION_SECONDS}s (20:00).",
+            }))
+            return JSONResponse({"job_id": job_id})
 
     # Kick off background inference
     thread = threading.Thread(

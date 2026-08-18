@@ -140,6 +140,18 @@
     <p class="mt-2 text-slate-400 text-sm">
       Upload a gameplay video (up to 20 minutes) to detect and localize visual bugs.
     </p>
+    <details class="mt-2 text-left text-xs text-slate-500 max-w-md mx-auto">
+      <summary class="cursor-pointer hover:text-slate-400 text-center">Supported videos</summary>
+      <ul class="mt-2 space-y-1 list-disc list-inside">
+        <li>Duration up to 20:00</li>
+        <li>Any resolution or aspect ratio — every video is resampled to a
+          fixed 224×224 frame size for analysis, so shape doesn't matter</li>
+        <li>H.264 in .mp4 recommended; .webm usually works. HEVC/AV1 or .mkv
+          may fail to preview in the browser or to decode server-side</li>
+        <li>Lower-resolution sources tend to upload and process more
+          reliably than very high-resolution captures</li>
+      </ul>
+    </details>
     <!-- Settings gear (top-right of heading block) -->
     <button
       id="open-settings-btn"
@@ -222,13 +234,28 @@
   <!-- Top bar -->
   <header class="flex items-center justify-between px-5 py-3 bg-slate-900 border-b border-slate-800 shrink-0">
     <h1 class="text-base font-semibold text-white tracking-tight">Perceptual Bug Detector</h1>
-    <button
-      id="new-upload-btn"
-      class="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
-    >
-      ← New Upload
-    </button>
+    <div class="flex items-center gap-2">
+      <button
+        id="export-review-btn"
+        title="Download all detections plus your review marks/edits as JSON"
+        class="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
+      >
+        Export review
+      </button>
+      <button
+        id="new-upload-btn"
+        class="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg transition-colors"
+      >
+        ← New Upload
+      </button>
+    </div>
   </header>
+
+  <!-- Warnings banner (pipeline-level issues surfaced by the server, e.g.
+       partial decode failures) — hidden unless the job actually reported any -->
+  <div id="warnings-banner" class="hidden bg-amber-900/30 border-b border-amber-800 px-5 py-2 shrink-0">
+    <ul id="warnings-list" class="text-xs text-amber-300 space-y-0.5"></ul>
+  </div>
 
   <!-- Video player -->
   <div class="bg-black shrink-0 flex justify-center" style="max-height: 45vh;">
@@ -244,43 +271,125 @@
   <div class="bg-slate-900 border-t border-slate-800 px-4 py-3 shrink-0">
     <div class="flex items-center gap-2 mb-1">
       <span class="text-xs text-slate-500 font-mono w-12 text-right" id="tl-current">0:00</span>
-      <div
-        id="timeline-track"
-        class="flex-1 bg-slate-800 rounded cursor-pointer select-none"
-      >
-        <div id="playhead"></div>
-        <!-- markers injected here -->
+      <div id="timeline-scroll" class="flex-1 overflow-x-auto">
+        <div
+          id="timeline-track"
+          class="bg-slate-800 rounded cursor-pointer select-none"
+          style="width: 100%;"
+        >
+          <div id="playhead"></div>
+          <!-- markers injected here -->
+        </div>
       </div>
       <span class="text-xs text-slate-500 font-mono w-12" id="tl-duration">0:00</span>
     </div>
-    <div class="flex gap-3 mt-2 flex-wrap" id="legend"></div>
+    <div class="flex items-center justify-between mt-2 flex-wrap gap-2">
+      <div class="flex gap-3 flex-wrap" id="legend"></div>
+      <div class="flex items-center gap-2">
+        <label class="text-[11px] text-slate-500">Zoom</label>
+        <div id="zoom-controls" class="flex gap-1">
+          <button data-zoom="1" class="zoom-btn text-[11px] px-2 py-0.5 rounded bg-slate-700 text-slate-200">1×</button>
+          <button data-zoom="2" class="zoom-btn text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-400">2×</button>
+          <button data-zoom="4" class="zoom-btn text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-400">4×</button>
+          <button data-zoom="8" class="zoom-btn text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-400">8×</button>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 mt-2">
+      <label class="text-[11px] text-slate-500 whitespace-nowrap">Min score</label>
+      <input id="score-filter" type="range" min="0" max="1" step="0.05" value="0"
+        class="w-40 accent-indigo-500" />
+      <span id="score-filter-val" class="text-[11px] text-slate-500 font-mono w-8">0.00</span>
+      <span id="score-filter-count" class="text-[11px] text-slate-600 ml-2"></span>
+      <p class="text-[11px] text-slate-600 ml-auto">
+        Score is the model's relative confidence for a detection — not a probability.
+      </p>
+    </div>
   </div>
 
   <!-- Bottom panel: bug list + detail -->
   <div class="flex flex-1 min-h-0 border-t border-slate-800">
 
     <!-- Bug list -->
-    <div class="w-56 shrink-0 border-r border-slate-800 flex flex-col bg-slate-900">
+    <div class="w-64 shrink-0 border-r border-slate-800 flex flex-col bg-slate-900">
       <div class="px-3 py-2 border-b border-slate-800">
         <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">Detections</p>
-        <p id="detection-count" class="text-xs text-slate-500 mt-0.5"></p>
+        <div class="flex items-center justify-between">
+          <p id="detection-count" class="text-xs text-slate-500 mt-0.5"></p>
+          <span id="review-save-indicator" class="text-[10px] text-slate-600"></span>
+        </div>
+        <div id="review-filter" class="flex gap-1 mt-2 flex-wrap">
+          <button data-filter="all" class="review-filter-btn text-[10px] px-2 py-0.5 rounded-full bg-indigo-600 text-white">All</button>
+          <button data-filter="unreviewed" class="review-filter-btn text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Unreviewed</button>
+          <button data-filter="correct" class="review-filter-btn text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Confirmed</button>
+          <button data-filter="incorrect" class="review-filter-btn text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">Rejected</button>
+        </div>
       </div>
       <ul id="bug-list" class="flex-1 overflow-y-auto text-sm"></ul>
+      <div id="removed-panel" class="hidden border-t border-slate-800 px-3 py-2 text-xs text-slate-500">
+        <button id="removed-toggle" class="hover:text-slate-300">Removed (<span id="removed-count">0</span>)</button>
+        <ul id="removed-list" class="hidden mt-1 space-y-1"></ul>
+      </div>
     </div>
 
     <!-- Detail panel -->
     <div class="flex-1 overflow-y-auto bg-slate-950 px-5 py-4">
-      <div id="detail-empty" class="h-full flex items-center justify-center text-slate-600 text-sm">
+      <div id="detail-empty" class="h-full flex items-center justify-center text-slate-600 text-sm text-center px-8">
         Select a detection to see details
       </div>
       <div id="detail-card" class="hidden">
-        <p class="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-3">Bug Segment</p>
-        <div class="flex items-baseline gap-3 mb-4">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-xs text-slate-500 uppercase tracking-wide font-semibold">Bug Segment</p>
+          <span id="detail-edited-badge" class="hidden text-[10px] px-2 py-0.5 rounded-full bg-indigo-900/50 text-indigo-300">Edited</span>
+        </div>
+        <div class="flex items-baseline gap-3 mb-1">
           <span id="detail-time" class="text-lg font-mono font-semibold text-white"></span>
           <span id="detail-duration" class="text-xs text-slate-500"></span>
         </div>
+        <p id="detail-original-time" class="hidden text-[11px] text-slate-600 mb-3 font-mono"></p>
+
+        <!-- Review actions -->
+        <div class="flex items-center gap-2 mb-4">
+          <button id="mark-correct-btn" class="text-xs px-3 py-1.5 rounded-lg border border-green-700 text-green-400 hover:bg-green-900/30 transition-colors">
+            ✓ Mark correct
+          </button>
+          <button id="mark-incorrect-btn" class="text-xs px-3 py-1.5 rounded-lg border border-red-700 text-red-400 hover:bg-red-900/30 transition-colors">
+            ✕ Mark incorrect
+          </button>
+          <span id="review-verdict-label" class="text-xs text-slate-500"></span>
+        </div>
+
         <p class="text-xs text-slate-500 uppercase tracking-wide font-semibold mb-2">Labels</p>
-        <div id="detail-labels" class="flex flex-wrap gap-2"></div>
+        <div id="detail-labels" class="flex flex-wrap gap-2 mb-4"></div>
+
+        <!-- Edit controls -->
+        <details id="edit-details" class="mb-4">
+          <summary class="text-xs text-slate-500 uppercase tracking-wide font-semibold cursor-pointer hover:text-slate-400">Edit</summary>
+          <div class="mt-3 space-y-3">
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-slate-500 w-12">Start</label>
+              <input id="edit-start" type="number" step="0.1" min="0" class="w-24 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
+              <button id="edit-start-now" class="text-[10px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400">Use playhead</button>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-slate-500 w-12">End</label>
+              <input id="edit-end" type="number" step="0.1" min="0" class="w-24 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white" />
+              <button id="edit-end-now" class="text-[10px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400">Use playhead</button>
+            </div>
+            <div>
+              <p class="text-xs text-slate-500 mb-1">Labels</p>
+              <div id="edit-labels" class="flex flex-wrap gap-2"></div>
+            </div>
+            <div class="flex gap-2 pt-1">
+              <button id="edit-save-btn" class="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white">Save edit</button>
+              <button id="edit-reset-btn" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200">Reset to original</button>
+            </div>
+          </div>
+        </details>
+
+        <button id="delete-segment-btn" class="text-xs px-3 py-1.5 rounded-lg border border-slate-700 text-slate-400 hover:border-red-700 hover:text-red-400 transition-colors">
+          Remove this detection
+        </button>
       </div>
     </div>
   </div>
@@ -319,14 +428,112 @@ const DEFAULT_COLOR = { bg: 'bg-slate-500', border: 'border-slate-400', text: 't
 // ─────────────────────────────────────────────────────────────────
 // State
 // ─────────────────────────────────────────────────────────────────
-let state = {
-  jobId: null,
-  pollTimer: null,
-  annotations: [],       // flat list from API
-  segments: [],          // grouped by (start, end) for display
-  selectedSegIdx: null,
-  videoDuration: 0,
-};
+const KNOWN_BUG_TYPES = ['z_clipping', 'corrupted_texture', 'geometry_corruption', 'z_fighting', 'boundary_hole'];
+
+function freshState() {
+  return {
+    jobId: null,
+    pollTimer: null,
+    annotations: [],       // flat list from API
+    segments: [],          // grouped by (start, end) for display
+    selectedSegIdx: null,
+    videoDuration: 0,
+    warnings: [],          // server-reported pipeline warnings for this job
+    review: {},            // key `${start}_${end}` -> {verdict, edited, deleted}
+    scoreFilter: 0,
+    reviewFilter: 'all',
+    zoom: 1,
+  };
+}
+let state = freshState();
+
+// ─────────────────────────────────────────────────────────────────
+// Review persistence — the backend (GET/POST /api/review/{job_id}) is the
+// source of truth, saved next to that job's own result.json. localStorage
+// is kept only as a same-tab fallback cache: if the save request fails
+// (offline, server restarted) the in-progress review isn't silently lost,
+// and if the initial GET fails, whatever was last synced is still shown.
+// Note this has the same durability envelope as the results themselves —
+// it lives in the server's /tmp for as long as that job does, no longer.
+// ─────────────────────────────────────────────────────────────────
+function reviewStorageKey(jobId) { return `bugreview:${jobId}`; }
+
+async function loadReview(jobId) {
+  try {
+    const res = await fetch(apiUrl(`/api/review/${jobId}`));
+    if (res.ok) {
+      const data = await res.json();
+      try { localStorage.setItem(reviewStorageKey(jobId), JSON.stringify(data)); } catch (e) {}
+      return data;
+    }
+  } catch (e) { /* network hiccup or old backend without this endpoint — fall back below */ }
+  try {
+    const raw = localStorage.getItem(reviewStorageKey(jobId));
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+
+let saveReviewTimer = null;
+let reviewSaveStatus = 'saved'; // 'saved' | 'saving' | 'error'
+
+function saveReview() {
+  try { localStorage.setItem(reviewStorageKey(state.jobId), JSON.stringify(state.review)); } catch (e) {}
+  clearTimeout(saveReviewTimer);
+  updateReviewSaveIndicator('saving');
+  saveReviewTimer = setTimeout(async () => {
+    try {
+      const res = await fetch(apiUrl(`/api/review/${state.jobId}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state.review),
+      });
+      updateReviewSaveIndicator(res.ok ? 'saved' : 'error');
+    } catch (e) {
+      // Server unreachable — localStorage above already has this change;
+      // it'll sync on the next successful save.
+      updateReviewSaveIndicator('error');
+    }
+  }, 500);
+}
+
+function updateReviewSaveIndicator(status) {
+  reviewSaveStatus = status;
+  const el = document.getElementById('review-save-indicator');
+  if (!el) return;
+  const labels = { saving: 'Saving…', saved: 'Saved to server', error: 'Not saved — kept locally, will retry' };
+  const colors = { saving: 'text-slate-500', saved: 'text-slate-600', error: 'text-amber-500' };
+  el.textContent = labels[status] || '';
+  el.className = `text-[10px] ${colors[status] || 'text-slate-600'}`;
+}
+
+function segKey(seg) { return `${seg.start}_${seg.end}`; }
+
+function getReview(seg) {
+  return state.review[segKey(seg)] || { verdict: null, edited: null, deleted: false };
+}
+
+function setReview(seg, patch) {
+  const key = segKey(seg);
+  state.review[key] = { ...getReview(seg), ...patch };
+  saveReview();
+}
+
+// Merges original segment data with any local edit overlay. Never mutates
+// state.segments — the original annotations are always kept intact so
+// "Reset to original" and the exported review can show both.
+function effectiveSeg(seg) {
+  const r = getReview(seg);
+  if (!r.edited) return seg;
+  return {
+    ...seg,
+    start: r.edited.start ?? seg.start,
+    end: r.edited.end ?? seg.end,
+    duration: (r.edited.end ?? seg.end) - (r.edited.start ?? seg.start),
+    bug_types: r.edited.types
+      ? r.edited.types.map(t => ({ type: t, score: null }))
+      : seg.bug_types,
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Page switching
@@ -383,9 +590,15 @@ fileInput.addEventListener('change', () => {
   if (fileInput.files[0]) handleFileSelected(fileInput.files[0]);
 });
 
+// Recognized by extension as a fallback for files the OS/browser reports
+// with a blank or generic MIME type (common for .mkv, some .mov files) —
+// file.type being empty doesn't mean the file isn't a video.
+const VIDEO_EXTENSIONS = /\.(mp4|mov|avi|mkv|webm|m4v|wmv|flv)$/i;
+
 function handleFileSelected(file) {
   uploadErr.classList.add('hidden');
-  if (!file.type.startsWith('video/')) {
+  const looksLikeVideo = file.type.startsWith('video/') || VIDEO_EXTENSIONS.test(file.name);
+  if (!looksLikeVideo) {
     showUploadError('Please select a video file.');
     return;
   }
@@ -396,15 +609,48 @@ function handleFileSelected(file) {
 
   // Check duration + resolution via a temporary <video> element. This is
   // informational only (advisory text below) — it does NOT resize/transcode
-  // the file. The server resamples to 8fps/224x224 during its own decode
-  // step regardless of what's uploaded, so there's no correctness reason to
-  // pre-resize client-side, only a (much heavier) bandwidth one — not worth
-  // the added complexity/dependency weight for this project.
+  // the file, and does NOT block upload based on resolution/aspect ratio:
+  // the server resamples every video to 8fps/224x224 during its own decode
+  // step regardless of source shape, so there is no correctness reason to
+  // reject any aspect ratio here.
+  //
+  // What this MUST NOT do: leave the Analyze button hidden with no
+  // explanation if metadata reading fails or never fires. That silent
+  // dead-end (no onerror handler, no timeout) was a real reported bug —
+  // both are handled below so every path ends in either a shown button or
+  // a visible error.
   const fileMeta = document.getElementById('file-meta');
   const tmpVideo = document.createElement('video');
   tmpVideo.preload = 'metadata';
+  let settled = false;
+
+  const objectUrl = URL.createObjectURL(file);
+  const cleanup = () => URL.revokeObjectURL(objectUrl);
+
+  const proceedWithoutMetadata = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    // Can't read duration/resolution client-side (unsupported by this
+    // browser, or the check timed out) — that's a browser-preview
+    // limitation, not proof the server can't process it. Let the user try
+    // rather than silently blocking them.
+    const nChunks = Math.ceil(file.size / CHUNK_SIZE);
+    fileMeta.textContent =
+      `Could not read this file's metadata in-browser — upload will still be ` +
+      `attempted (${nChunks} chunk${nChunks === 1 ? '' : 's'}). If analysis fails, ` +
+      `try re-encoding as H.264 MP4.`;
+    fileMeta.classList.remove('hidden');
+    uploadBtn.classList.remove('hidden');
+  };
+
+  const timeoutId = setTimeout(proceedWithoutMetadata, 8000);
+
   tmpVideo.onloadedmetadata = () => {
-    URL.revokeObjectURL(tmpVideo.src);
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeoutId);
+    cleanup();
     if (tmpVideo.duration > MAX_DURATION) {
       showUploadError(`Video is ${fmtTime(tmpVideo.duration)} — maximum allowed is 20:00.`);
       uploadBtn.classList.add('hidden');
@@ -420,7 +666,27 @@ function handleFileSelected(file) {
       uploadBtn.classList.remove('hidden');
     }
   };
-  tmpVideo.src = URL.createObjectURL(file);
+
+  tmpVideo.onerror = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeoutId);
+    cleanup();
+    // The browser couldn't decode this file at all for preview purposes.
+    // This is very likely what the 1:1-aspect-ratio report actually hit —
+    // not the aspect ratio itself (nothing in this pipeline checks that),
+    // but an unsupported codec/container the browser can't preview. The
+    // server may still be able to decode it, so this is a warning, not a
+    // hard block.
+    fileMeta.textContent =
+      `Your browser can't preview this file (unsupported codec or container). ` +
+      `The server may still be able to process it — try uploading anyway, or ` +
+      `re-encode as H.264 MP4 if it fails.`;
+    fileMeta.classList.remove('hidden');
+    uploadBtn.classList.remove('hidden');
+  };
+
+  tmpVideo.src = objectUrl;
 }
 
 function showUploadError(msg) {
@@ -534,6 +800,7 @@ async function pollStatus() {
 
     if (data.status === 'done') {
       clearInterval(state.pollTimer);
+      state.warnings = Array.isArray(data.warnings) ? data.warnings : [];
       loadResults();
     } else if (data.status === 'error') {
       clearInterval(state.pollTimer);
@@ -553,15 +820,21 @@ async function loadResults() {
   const data = await res.json();
 
   state.annotations = data.annotations || [];
+  state.review = await loadReview(state.jobId);
 
-  // Group annotations that share the same start/end into one "segment"
+  // Group annotations that share the same start/end into one "segment".
+  // bug_types carries {type, score} — score comes straight from the
+  // model's own output (train.py's decode_predictions/soft_nms_temporal),
+  // nothing computed or altered here.
   const map = new Map();
   for (const ann of state.annotations) {
     const key = `${ann.start}_${ann.end}`;
     if (!map.has(key)) map.set(key, { start: ann.start, end: ann.end, duration: ann.duration, bug_types: [] });
-    map.get(key).bug_types.push(ann.bug_type);
+    map.get(key).bug_types.push({ type: ann.bug_type, score: typeof ann.score === 'number' ? ann.score : null });
   }
   state.segments = Array.from(map.values()).sort((a, b) => a.start - b.start);
+
+  renderWarningsBanner();
 
   // Set video source
   const video = document.getElementById('video-player');
@@ -579,26 +852,68 @@ async function loadResults() {
   video.addEventListener('timeupdate', onTimeUpdate);
 }
 
+function renderWarningsBanner() {
+  const banner = document.getElementById('warnings-banner');
+  const list = document.getElementById('warnings-list');
+  const allWarnings = [...state.warnings];
+  if (state.segments.length === 0) {
+    allWarnings.push(
+      '0 detections. This does NOT mean the video is bug-free — this model has a ' +
+      'known high false-negative rate on footage unlike its training data. Manual ' +
+      'review is still recommended.'
+    );
+  }
+  if (allWarnings.length === 0) {
+    banner.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+  list.innerHTML = allWarnings.map(w => `<li>⚠ ${w}</li>`).join('');
+  banner.classList.remove('hidden');
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Timeline
 // ─────────────────────────────────────────────────────────────────
+// A segment passes the current filters if: not soft-deleted, every score
+// present meets the min-score floor (labels with no score, e.g. manually
+// added ones, always pass), and it matches the review-status filter.
+function segmentVisible(seg) {
+  const r = getReview(seg);
+  if (r.deleted) return false;
+  const maxScore = Math.max(0, ...seg.bug_types.map(bt => bt.score ?? 1));
+  if (maxScore < state.scoreFilter) return false;
+  if (state.reviewFilter === 'unreviewed') return !r.verdict;
+  if (state.reviewFilter === 'correct') return r.verdict === 'correct';
+  if (state.reviewFilter === 'incorrect') return r.verdict === 'incorrect';
+  return true;
+}
+
 function buildTimeline() {
   const track = document.getElementById('timeline-track');
+  track.style.width = `${state.zoom * 100}%`;
   // Remove old markers (keep playhead)
   track.querySelectorAll('.bug-marker').forEach(el => el.remove());
 
   const dur = state.videoDuration;
 
-  // Stack markers per bug_type within each segment
   state.segments.forEach((seg, idx) => {
-    const numTypes = seg.bug_types.length;
-    seg.bug_types.forEach((bt, btIdx) => {
-      const c = colorFor(bt);
+    if (!segmentVisible(seg)) return;
+    const eff = effectiveSeg(seg);
+    const r = getReview(seg);
+    const numTypes = eff.bug_types.length;
+    eff.bug_types.forEach((bt, btIdx) => {
+      const c = colorFor(bt.type);
       const marker = document.createElement('div');
       marker.className = `bug-marker`;
-      marker.style.left = `${(seg.start / dur) * 100}%`;
-      marker.style.width = `max(4px, ${((seg.end - seg.start) / dur) * 100}%)`;
+      marker.style.left = `${(eff.start / dur) * 100}%`;
+      marker.style.width = `max(4px, ${((eff.end - eff.start) / dur) * 100}%)`;
       marker.style.backgroundColor = c.hex;
+      // Score modulates opacity within the pipeline's own floor (~0.25) to
+      // 1.0 — a purely visual cue, doesn't change which segments render.
+      const opacity = bt.score != null ? Math.max(0.35, Math.min(1, bt.score)) : 0.85;
+      marker.style.opacity = String(opacity);
+      if (r.verdict === 'incorrect') marker.style.filter = 'grayscale(60%)';
       // Stack vertically if multi-label
       if (numTypes > 1) {
         const sliceH = 20 / numTypes;
@@ -613,34 +928,101 @@ function buildTimeline() {
       track.appendChild(marker);
     });
   });
-
-  // Click on track background → seek
-  track.addEventListener('click', e => {
-    if (e.target === track || e.target.id === 'playhead') {
-      const rect = track.getBoundingClientRect();
-      const ratio = (e.clientX - rect.left) / rect.width;
-      const video = document.getElementById('video-player');
-      video.currentTime = ratio * state.videoDuration;
-    }
-  });
 }
+
+// Click on track background → seek. Registered once — buildTimeline() now
+// re-renders on every filter/zoom/review change, and #timeline-track is a
+// static element, so attaching this inside buildTimeline() would stack a
+// new listener on every re-render instead of replacing it.
+document.getElementById('timeline-track').addEventListener('click', e => {
+  const track = e.currentTarget;
+  if (e.target === track || e.target.id === 'playhead') {
+    const rect = track.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    const video = document.getElementById('video-player');
+    video.currentTime = ratio * state.videoDuration;
+  }
+});
 
 function onTimeUpdate() {
   const video = document.getElementById('video-player');
   const ratio = video.currentTime / state.videoDuration;
   document.getElementById('playhead').style.left = `${ratio * 100}%`;
   document.getElementById('tl-current').textContent = fmtTime(video.currentTime);
+
+  if (state.zoom > 1) {
+    const scroller = document.getElementById('timeline-scroll');
+    const track = document.getElementById('timeline-track');
+    const playheadX = ratio * track.scrollWidth;
+    const margin = scroller.clientWidth * 0.2;
+    if (playheadX < scroller.scrollLeft + margin || playheadX > scroller.scrollLeft + scroller.clientWidth - margin) {
+      scroller.scrollLeft = Math.max(0, playheadX - scroller.clientWidth / 2);
+    }
+  }
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Zoom controls
+// ─────────────────────────────────────────────────────────────────
+document.getElementById('zoom-controls').addEventListener('click', e => {
+  const btn = e.target.closest('.zoom-btn');
+  if (!btn) return;
+  state.zoom = parseInt(btn.dataset.zoom, 10);
+  document.querySelectorAll('.zoom-btn').forEach(b => {
+    const active = b === btn;
+    b.classList.toggle('bg-slate-700', active);
+    b.classList.toggle('text-slate-200', active);
+    b.classList.toggle('bg-slate-800', !active);
+    b.classList.toggle('text-slate-400', !active);
+  });
+  buildTimeline();
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Score filter
+// ─────────────────────────────────────────────────────────────────
+const scoreFilterInput = document.getElementById('score-filter');
+scoreFilterInput.addEventListener('input', () => {
+  state.scoreFilter = parseFloat(scoreFilterInput.value);
+  document.getElementById('score-filter-val').textContent = state.scoreFilter.toFixed(2);
+  buildTimeline();
+  buildBugList();
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Review status filter (All / Unreviewed / Confirmed / Rejected)
+// ─────────────────────────────────────────────────────────────────
+document.getElementById('review-filter').addEventListener('click', e => {
+  const btn = e.target.closest('.review-filter-btn');
+  if (!btn) return;
+  state.reviewFilter = btn.dataset.filter;
+  document.querySelectorAll('.review-filter-btn').forEach(b => {
+    const active = b === btn;
+    b.classList.toggle('bg-indigo-600', active);
+    b.classList.toggle('text-white', active);
+    b.classList.toggle('bg-slate-800', !active);
+    b.classList.toggle('text-slate-400', !active);
+  });
+  buildTimeline();
+  buildBugList();
+});
 
 // ─────────────────────────────────────────────────────────────────
 // Tooltip
 // ─────────────────────────────────────────────────────────────────
 const tooltip = document.getElementById('tooltip');
 
+function scoreLabel(score) {
+  if (score == null) return '';
+  const band = score >= 0.6 ? 'high' : score >= 0.4 ? 'med' : 'low';
+  return ` <span style="opacity:0.65">(${score.toFixed(2)} ${band})</span>`;
+}
+
 function showTooltip(e, seg) {
+  const eff = effectiveSeg(seg);
   tooltip.innerHTML = `
-    <span style="color:#94a3b8">${fmtTime(seg.start)} – ${fmtTime(seg.end)}</span><br>
-    ${seg.bug_types.map(bt => `<span style="color:${colorFor(bt).hex}">${bugLabel(bt)}</span>`).join('<br>')}
+    <span style="color:#94a3b8">${fmtTime(eff.start)} – ${fmtTime(eff.end)}</span><br>
+    ${eff.bug_types.map(bt => `<span style="color:${colorFor(bt.type).hex}">${bugLabel(bt.type)}${scoreLabel(bt.score)}</span>`).join('<br>')}
   `;
   tooltip.style.display = 'block';
   positionTooltip(e);
@@ -663,28 +1045,75 @@ document.addEventListener('mousemove', e => {
 function buildBugList() {
   const ul = document.getElementById('bug-list');
   ul.innerHTML = '';
-  document.getElementById('detection-count').textContent =
-    `${state.segments.length} segment${state.segments.length !== 1 ? 's' : ''}`;
 
-  state.segments.forEach((seg, idx) => {
+  const visibleIdxs = state.segments
+    .map((seg, idx) => ({ seg, idx }))
+    .filter(({ seg }) => segmentVisible(seg));
+
+  document.getElementById('detection-count').textContent =
+    `${visibleIdxs.length} of ${state.segments.length} segment${state.segments.length !== 1 ? 's' : ''} shown`;
+
+  visibleIdxs.forEach(({ seg, idx }) => {
+    const eff = effectiveSeg(seg);
+    const r = getReview(seg);
     const li = document.createElement('li');
     li.dataset.segIdx = idx;
     li.className = 'px-3 py-2.5 cursor-pointer hover:bg-slate-800 border-b border-slate-800/60 transition-colors';
-    // Primary color = first bug type
-    const c = colorFor(seg.bug_types[0]);
+    const c = colorFor(eff.bug_types[0].type);
+    const bestScore = Math.max(...eff.bug_types.map(bt => bt.score ?? -1));
+    const verdictIcon = r.verdict === 'correct' ? '<span class="text-green-400" title="Marked correct">✓</span>'
+      : r.verdict === 'incorrect' ? '<span class="text-red-400" title="Marked incorrect">✕</span>' : '';
     li.innerHTML = `
       <div class="flex items-center gap-2">
         <span class="w-2 h-2 rounded-full shrink-0" style="background:${c.hex}"></span>
-        <span class="font-mono text-xs text-slate-300">${fmtTime(seg.start)}</span>
+        <span class="font-mono text-xs text-slate-300">${fmtTime(eff.start)}</span>
+        ${bestScore >= 0 ? `<span class="text-[10px] text-slate-500 font-mono">${bestScore.toFixed(2)}</span>` : ''}
+        ${r.edited ? '<span class="text-[9px] text-indigo-400" title="Edited">✎</span>' : ''}
+        <span class="ml-auto text-xs">${verdictIcon}</span>
       </div>
       <div class="ml-4 mt-0.5 flex flex-wrap gap-1">
-        ${seg.bug_types.map(bt => `<span class="text-[10px] px-1.5 py-0.5 rounded" style="background:${colorFor(bt).hex}22;color:${colorFor(bt).hex}">${bugLabel(bt)}</span>`).join('')}
+        ${eff.bug_types.map(bt => `<span class="text-[10px] px-1.5 py-0.5 rounded" style="background:${colorFor(bt.type).hex}22;color:${colorFor(bt.type).hex}">${bugLabel(bt.type)}</span>`).join('')}
       </div>
     `;
     li.addEventListener('click', () => selectSegment(idx));
     ul.appendChild(li);
   });
+
+  buildRemovedPanel();
 }
+
+function buildRemovedPanel() {
+  const removed = state.segments
+    .map((seg, idx) => ({ seg, idx }))
+    .filter(({ seg }) => getReview(seg).deleted);
+
+  const panel = document.getElementById('removed-panel');
+  const list = document.getElementById('removed-list');
+  document.getElementById('removed-count').textContent = removed.length;
+  panel.classList.toggle('hidden', removed.length === 0);
+
+  list.innerHTML = removed.map(({ seg, idx }) => {
+    const eff = effectiveSeg(seg);
+    return `
+      <li class="flex items-center justify-between gap-2">
+        <span class="font-mono">${fmtTime(eff.start)} · ${eff.bug_types.map(bt => bugLabel(bt.type)).join(', ')}</span>
+        <button class="undo-remove-btn text-indigo-400 hover:text-indigo-300" data-seg-idx="${idx}">Undo</button>
+      </li>`;
+  }).join('');
+
+  list.querySelectorAll('.undo-remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.segIdx, 10);
+      setReview(state.segments[idx], { deleted: false });
+      buildTimeline();
+      buildBugList();
+    });
+  });
+}
+
+document.getElementById('removed-toggle').addEventListener('click', () => {
+  document.getElementById('removed-list').classList.toggle('hidden');
+});
 
 // ─────────────────────────────────────────────────────────────────
 // Legend
@@ -708,8 +1137,10 @@ function buildLegend() {
 function selectSegment(idx) {
   state.selectedSegIdx = idx;
   const seg = state.segments[idx];
+  const eff = effectiveSeg(seg);
+  const r = getReview(seg);
   const video = document.getElementById('video-player');
-  video.currentTime = seg.start;
+  video.currentTime = eff.start;
 
   // Highlight markers
   document.querySelectorAll('.bug-marker').forEach(m => {
@@ -722,7 +1153,7 @@ function selectSegment(idx) {
     li.classList.toggle('bg-slate-800', isSelected);
     li.classList.toggle('border-l-2', isSelected);
     if (isSelected) {
-      li.style.borderLeftColor = colorFor(seg.bug_types[0]).hex;
+      li.style.borderLeftColor = colorFor(eff.bug_types[0].type).hex;
       li.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     } else {
       li.style.borderLeftColor = '';
@@ -735,32 +1166,160 @@ function selectSegment(idx) {
   card.classList.remove('hidden');
 
   document.getElementById('detail-time').textContent =
-    `${fmtTime(seg.start)} – ${fmtTime(seg.end)}`;
+    `${fmtTime(eff.start)} – ${fmtTime(eff.end)}`;
   document.getElementById('detail-duration').textContent =
-    `${seg.duration.toFixed(2)}s`;
+    `${eff.duration.toFixed(2)}s`;
+
+  const origTimeEl = document.getElementById('detail-original-time');
+  const editedBadge = document.getElementById('detail-edited-badge');
+  if (r.edited) {
+    origTimeEl.textContent = `originally ${fmtTime(seg.start)} – ${fmtTime(seg.end)}`;
+    origTimeEl.classList.remove('hidden');
+    editedBadge.classList.remove('hidden');
+  } else {
+    origTimeEl.classList.add('hidden');
+    editedBadge.classList.add('hidden');
+  }
 
   const labelsDiv = document.getElementById('detail-labels');
   labelsDiv.innerHTML = '';
-  seg.bug_types.forEach(bt => {
-    const c = colorFor(bt);
+  eff.bug_types.forEach(bt => {
+    const c = colorFor(bt.type);
     const badge = document.createElement('button');
     badge.className = `px-3 py-1.5 rounded-lg text-sm font-medium cursor-pointer transition-opacity hover:opacity-80 border`;
     badge.style.background = c.hex + '22';
     badge.style.color = c.hex;
     badge.style.borderColor = c.hex + '55';
-    badge.title = `Seek to ${fmtTime(seg.start)}`;
+    badge.title = `Seek to ${fmtTime(eff.start)}`;
     badge.innerHTML = `
       <span class="inline-block w-2 h-2 rounded-full mr-1.5" style="background:${c.hex}"></span>
-      ${bugLabel(bt)}
-      <span class="ml-1.5 text-xs opacity-60 font-mono">${fmtTime(seg.start)}</span>
+      ${bugLabel(bt.type)}
+      <span class="ml-1.5 text-xs opacity-60 font-mono">${fmtTime(eff.start)}${scoreLabel(bt.score)}</span>
     `;
     badge.addEventListener('click', () => {
-      video.currentTime = seg.start;
+      video.currentTime = eff.start;
       video.play();
     });
     labelsDiv.appendChild(badge);
   });
+
+  // Review verdict buttons
+  const verdictLabel = document.getElementById('review-verdict-label');
+  const correctBtn = document.getElementById('mark-correct-btn');
+  const incorrectBtn = document.getElementById('mark-incorrect-btn');
+  correctBtn.classList.toggle('bg-green-900/40', r.verdict === 'correct');
+  incorrectBtn.classList.toggle('bg-red-900/40', r.verdict === 'incorrect');
+  verdictLabel.textContent = r.verdict ? `Marked ${r.verdict}` : '';
+
+  // Edit form
+  document.getElementById('edit-start').value = eff.start.toFixed(2);
+  document.getElementById('edit-end').value = eff.end.toFixed(2);
+  const editLabelsDiv = document.getElementById('edit-labels');
+  const activeTypes = new Set(eff.bug_types.map(bt => bt.type));
+  editLabelsDiv.innerHTML = KNOWN_BUG_TYPES.map(t => `
+    <label class="flex items-center gap-1 text-xs text-slate-300 cursor-pointer">
+      <input type="checkbox" class="edit-label-checkbox" value="${t}" ${activeTypes.has(t) ? 'checked' : ''} />
+      ${bugLabel(t)}
+    </label>
+  `).join('');
+  document.getElementById('edit-details').open = false;
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Review actions: mark correct/incorrect, edit, delete/undo
+// ─────────────────────────────────────────────────────────────────
+function currentSeg() {
+  return state.selectedSegIdx != null ? state.segments[state.selectedSegIdx] : null;
+}
+
+function refreshAfterReviewChange() {
+  buildTimeline();
+  buildBugList();
+  if (state.selectedSegIdx != null) selectSegment(state.selectedSegIdx);
+}
+
+document.getElementById('mark-correct-btn').addEventListener('click', () => {
+  const seg = currentSeg();
+  if (!seg) return;
+  const r = getReview(seg);
+  setReview(seg, { verdict: r.verdict === 'correct' ? null : 'correct' });
+  refreshAfterReviewChange();
+});
+
+document.getElementById('mark-incorrect-btn').addEventListener('click', () => {
+  const seg = currentSeg();
+  if (!seg) return;
+  const r = getReview(seg);
+  setReview(seg, { verdict: r.verdict === 'incorrect' ? null : 'incorrect' });
+  refreshAfterReviewChange();
+});
+
+document.getElementById('delete-segment-btn').addEventListener('click', () => {
+  const seg = currentSeg();
+  if (!seg) return;
+  setReview(seg, { deleted: true });
+  document.getElementById('detail-card').classList.add('hidden');
+  document.getElementById('detail-empty').classList.remove('hidden');
+  state.selectedSegIdx = null;
+  buildTimeline();
+  buildBugList();
+});
+
+document.getElementById('edit-start-now').addEventListener('click', () => {
+  document.getElementById('edit-start').value = document.getElementById('video-player').currentTime.toFixed(2);
+});
+document.getElementById('edit-end-now').addEventListener('click', () => {
+  document.getElementById('edit-end').value = document.getElementById('video-player').currentTime.toFixed(2);
+});
+
+document.getElementById('edit-save-btn').addEventListener('click', () => {
+  const seg = currentSeg();
+  if (!seg) return;
+  const start = parseFloat(document.getElementById('edit-start').value);
+  const end = parseFloat(document.getElementById('edit-end').value);
+  const types = Array.from(document.querySelectorAll('.edit-label-checkbox:checked')).map(cb => cb.value);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    alert('End time must be greater than start time.');
+    return;
+  }
+  if (types.length === 0) {
+    alert('Select at least one label.');
+    return;
+  }
+  setReview(seg, { edited: { start, end, types } });
+  refreshAfterReviewChange();
+});
+
+document.getElementById('edit-reset-btn').addEventListener('click', () => {
+  const seg = currentSeg();
+  if (!seg) return;
+  setReview(seg, { edited: null });
+  refreshAfterReviewChange();
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Export review — original annotations + review overlay, side by side.
+// This is the "feedback data for future development" the marks/edits are
+// meant to produce, without any server-side storage (see review persistence
+// note above for why that's the right call for this tool).
+// ─────────────────────────────────────────────────────────────────
+document.getElementById('export-review-btn').addEventListener('click', () => {
+  const payload = {
+    job_id: state.jobId,
+    exported_at: new Date().toISOString(),
+    original_annotations: state.annotations,
+    review: state.review,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `bug-review-${state.jobId}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
 
 // ─────────────────────────────────────────────────────────────────
 // New upload
@@ -770,14 +1329,20 @@ document.getElementById('new-upload-btn').addEventListener('click', () => {
   video.pause();
   video.src = '';
   video.removeEventListener('timeupdate', onTimeUpdate);
-  state = { jobId: null, pollTimer: null, annotations: [], segments: [], selectedSegIdx: null, videoDuration: 0 };
+  state = freshState();
   selectedFile = null;
   fileInfo.classList.add('hidden');
+  document.getElementById('file-meta').classList.add('hidden');
   uploadErr.classList.add('hidden');
   uploadBtn.classList.add('hidden');
   uploadBtn.disabled = false;
   uploadBtn.textContent = 'Analyze Video';
   fileInput.value = '';
+  document.getElementById('warnings-banner').classList.add('hidden');
+  document.getElementById('score-filter').value = 0;
+  document.getElementById('score-filter-val').textContent = '0.00';
+  document.getElementById('detail-card').classList.add('hidden');
+  document.getElementById('detail-empty').classList.remove('hidden');
   showPage('upload');
 });
 

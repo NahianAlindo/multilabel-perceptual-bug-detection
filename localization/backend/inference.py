@@ -101,10 +101,13 @@ def _run_local_inference(job_id: str, video_path: str):
             text=True, bufsize=1
         )
         progress = 10
+        tail_lines = []
         for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue
+            tail_lines.append(line)
+            tail_lines = tail_lines[-15:]
             if progress < 90:
                 progress = min(90, progress + 2)
             _write_status(job_dir, "processing", progress, line[:120])
@@ -112,8 +115,12 @@ def _run_local_inference(job_id: str, video_path: str):
         proc.wait()
 
         if proc.returncode != 0:
+            # Keep the subprocess's own last lines instead of a bare exit
+            # code — the traceback that actually explains a failure almost
+            # always shows up there.
+            detail = " | ".join(tail_lines[-5:]) or "(no output captured)"
             _write_status(job_dir, "error", 0,
-                          f"Inference exited with code {proc.returncode}")
+                          f"Inference exited with code {proc.returncode}: {detail}"[:500])
             return
 
         if not (job_dir / "result.json").exists():
